@@ -78,7 +78,7 @@ class AcpAgent:
             res = await self.request("initialize", {
                 "protocolVersion": PROTOCOL_VERSION,
                 "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
-                "clientInfo": {"name": "briefling-acp-bridge", "version": "0.1.0"},
+                "clientInfo": {"name": "briefling-acp-bridge", "version": "0.2.0"},
             })
             self.capabilities = res.get("agentCapabilities") or {} if isinstance(res, dict) else {}
             self.info = res.get("agentInfo") or {} if isinstance(res, dict) else {}

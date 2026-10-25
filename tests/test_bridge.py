@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -205,24 +206,75 @@ def test_run_exits_when_the_agent_cannot_start(tmp_path, caplog):
 
 
 def test_run_refuses_trust_all_tools(tmp_path, capsys):
-    assert cli.main(["run", "--env", str(tmp_path / "e"), "--", "kiro-cli", "acp", "--trust-all-tools"]) == 2
+    assert cli.main(["--env", str(tmp_path / "e"), "--", "kiro-cli", "acp", "--trust-all-tools"]) == 2
     assert "refusing --trust-all-tools" in capsys.readouterr().err
 
 
-def test_join_writes_private_env_without_printing_the_secret(tmp_path, capsys, monkeypatch):
+def test_run_without_link_nor_credentials_says_how_to_join(tmp_path, capsys, monkeypatch):
+    for k in cli.KEYS:
+        monkeypatch.delenv(k, raising=False)
+    assert cli.main(["--env", str(tmp_path / "e")]) == 1
+    assert 'run `briefling-acp "<invitation link>"`' in capsys.readouterr().err
+
+
+def test_one_command_joins_then_runs_and_never_prints_the_secret(tmp_path, capsys, monkeypatch):
     joined = {"agent": "kiro", "spaces": ["sp"], "allowed": [TRUSTED],
               "credentials": {"client_id": "cid", "client_secret": "s3cr3t-xyz", "token_url": "https://t/oauth2/token"}}
+    runs = []
 
     async def redeem(app, code, timeout):
         assert app == "https://b.example" and len(code) == 32
         return "wss://hub.example", joined
     monkeypatch.setattr(cli.join, "redeem", redeem)
+    monkeypatch.setattr(cli, "do_run", lambda env, command, cwd: runs.append((env, command, cwd)) or 0)
     path = tmp_path / "conf" / "bridge.env"
-    assert cli.main(["join", f"https://b.example/agent.md?code={'A' * 32}", "--env", str(path)]) == 0
+    link = f"https://b.example/agent.md?code={'A' * 32}"
+    assert cli.main([link, "--env", str(path)]) == 0
+    assert runs == [(str(path), ["kiro-cli", "acp"], ".")], "joined, then runs Kiro by default"
     out = capsys.readouterr()
     assert "s3cr3t" not in out.out + out.err
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     env = cli.read_env(str(path))
     assert env["BRIEFLING_CLIENT_SECRET"] == "s3cr3t-xyz" and env["BRIEFLING_ALLOWED_USERS"] == TRUSTED
     assert env["BRIEFLING_WS_URL"] == "wss://hub.example"
-    assert cli.main(["join", f"https://b.example/agent.md?code={'A' * 32}", "--env", str(path)]) == 1  # no overwrite
+    assert cli.main([link, "--env", str(path)]) == 1 and len(runs) == 1  # already joined: no overwrite, no run
+    assert cli.main(["--env", str(path), "--", "kiro-cli", "acp", "--agent", "x"]) == 0
+    assert runs[-1][1] == ["kiro-cli", "acp", "--agent", "x"]
+
+
+def test_kiro_not_logged_in_starts_kiro_login_once_then_retries(tmp_path, monkeypatch):
+    """A fake `kiro-cli`: refuses `acp` until `login` ran (Kiro's own message), then acts as the scripted agent."""
+    kiro = tmp_path / "kiro-cli"
+    kiro.write_text(f"""#!/bin/sh
+if [ "$1" = login ]; then touch {tmp_path}/logged; exit 0; fi
+[ -f {tmp_path}/logged ] || {{ echo 'error: You are not logged in, please log in with kiro-cli login' >&2; exit 1; }}
+exec {sys.executable} {FAKE[1]}
+""")
+    kiro.chmod(0o755)
+    try:
+        subprocess.run([str(kiro), "--version"], capture_output=True, timeout=10)
+    except PermissionError:
+        pytest.skip("the temp directory is mounted noexec here (use --basetemp elsewhere)")
+    monkeypatch.setattr(cli, "interactive", lambda: True)
+    started = []
+
+    async def fake_run(self):  # stop right after the agent started: no hub needed
+        try:
+            await self.agent.ensure_started()
+        except Exception:
+            await asyncio.sleep(0.2)
+            await self.agent.stop()
+            raise SystemExit(1)
+        started.append(self.agent.info.get("name"))
+        await self.agent.stop()
+    monkeypatch.setattr(Bridge, "run", fake_run)
+    conf = {"BRIEFLING_WS_URL": "ws://x", "BRIEFLING_TOKEN_URL": "http://x", "BRIEFLING_CLIENT_ID": "c",
+            "BRIEFLING_CLIENT_SECRET": "s", "BRIEFLING_ALLOWED_USERS": TRUSTED}
+    for k, v in conf.items():
+        monkeypatch.setenv(k, v)
+    assert cli.do_run(str(tmp_path / "e"), [str(kiro), "acp"], str(tmp_path)) == 0
+    assert (tmp_path / "logged").exists() and started == ["fake"]
+    (tmp_path / "logged").unlink()
+    monkeypatch.setattr(cli, "interactive", lambda: False)  # not a terminal (service manager): no login, exit 1
+    assert cli.do_run(str(tmp_path / "e"), [str(kiro), "acp"], str(tmp_path)) == 1
+    assert not (tmp_path / "logged").exists()

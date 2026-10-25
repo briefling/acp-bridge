@@ -6,35 +6,29 @@ changes). The bridge is a small Python daemon: it joins the hub with an invitati
 one ACP session per briefling conversation, relays each message of a trusted human as a prompt and streams the agent's
 reply back as one message per turn.
 
-## Install
+## Install and start
 
-Python 3.11+, in a virtual environment (pin the release tag):
+On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-python3 -m venv ~/.venvs/briefling-acp
-~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.1.0"
-export PATH="$HOME/.venvs/briefling-acp/bin:$PATH"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.2.0"
+cd <the folder Kiro will work in>
+briefling-acp "<invitation link>"
 ```
 
-## Join, then run
+That is all. The first run joins the hub with the link (credentials saved in `~/.config/briefling-acp/bridge.env`,
+mode 600), opens `kiro-cli login` if Kiro is not logged in yet, then starts `kiro-cli acp`. Next times, from the same
+folder: `briefling-acp`. Stop it with Ctrl-C.
 
-1. In briefling, an admin of the space opens the space settings, **Invite an agent**, types the agent's name (lower
-   case, e.g. `kiro`) and copies the link `<AppUrl>/agent.md?code=...` (one use, 24 hours). Every person who should
-   drive the agent must be **Trusted** in the space before the join: the bridge only answers them.
-2. On the agent's machine:
+The link comes from an admin of the space: space settings, **Invite an agent**, the agent's name in lower case (e.g.
+`kiro`), **Copy** (one use, 24 hours). Every person who should drive the agent must be **Trusted** in the space before
+the join: the bridge only answers them. In the space settings the invitation then shows **Connected**; in the Lounge,
+`@kiro hello` gets an answer.
 
-   ```sh
-   briefling-acp join "<the link>"            # writes ~/.config/briefling-acp/bridge.env (mode 600)
-   kiro-cli login                              # once, if Kiro is not logged in yet (--use-device-flow without a browser)
-   briefling-acp run --cwd ~/work/my-repo -- kiro-cli acp
-   ```
-
-   `--cwd` is the working directory of every session (the agent reads and writes there). `--env FILE` picks another env
-   file (one per agent). The `BRIEFLING_*` variables of the process environment override the file.
-3. In the space settings the invitation shows **Connected**; in the Lounge, `@kiro hello` gets an answer.
-
-Other agents: `briefling-acp run -- <command>`, e.g. `-- kiro-cli acp --agent my-agent`, or the ACP command of another
-CLI. Keep the process running with your service manager (systemd, launchd, tmux).
+Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
+agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
+`-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.2.0"`.
 
 ## What the bridge does, and does not
 
@@ -50,7 +44,8 @@ CLI. Keep the process running with your service manager (systemd, launchd, tmux)
   when the agent supports it, else a new session starts).
 - **Not relayed (v1)**: attachments (the agent is told how many it missed), questions with buttons, briefling's agent
   tools (`propose_thread`, `turn_outcome`, resources, project memory), cost per thread.
-- **Kiro specifics**: `kiro-cli acp` refuses to start when not logged in; the bridge then exits with Kiro's message.
+- **Kiro specifics**: `kiro-cli acp` refuses to start when not logged in; in a terminal the bridge then runs
+  `kiro-cli login` once and retries, otherwise (service manager) it exits with Kiro's message.
   The bridge only uses standard ACP methods (`initialize`, `session/new|load|prompt|cancel`, `session/update`,
   `session/request_permission`), which Kiro documents for its default engine and for `--agent-engine=v3`; none of the
   Kiro-specific extensions.
