@@ -15,6 +15,8 @@ import json
 import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from . import __version__
+
 logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
@@ -78,7 +80,7 @@ class AcpAgent:
             res = await self.request("initialize", {
                 "protocolVersion": PROTOCOL_VERSION,
                 "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
-                "clientInfo": {"name": "briefling-acp-bridge", "version": "0.2.0"},
+                "clientInfo": {"name": "briefling-acp-bridge", "version": __version__},
             })
             self.capabilities = res.get("agentCapabilities") or {} if isinstance(res, dict) else {}
             self.info = res.get("agentInfo") or {} if isinstance(res, dict) else {}
@@ -173,8 +175,10 @@ class AcpAgent:
             if cb and isinstance(params.get("update"), dict):
                 await cb(params["update"])
             return
-        if rid is None:
-            return  # other notifications (Kiro extensions...): ignored
+        if rid is None:  # other notifications (Kiro extensions...): ignored, but an MCP server ready is worth a line
+            if method == "_kiro.dev/mcp/server_initialized":
+                logger.info("agent: MCP server ready: %s", str(params.get("serverName") or params.get("name") or params)[:120])
+            return
         if method == "session/request_permission":
             cb = self._permissions.get(sid) if isinstance(sid, str) else None
             if cb:
@@ -186,19 +190,20 @@ class AcpAgent:
 
     # -- sessions -----------------------------------------------------------------
 
-    async def new_session(self) -> str:
-        res = await self.request("session/new", {"cwd": self.cwd, "mcpServers": []}, timeout=120)
+    async def new_session(self, mcp_servers: Optional[List[Dict[str, Any]]] = None) -> str:
+        res = await self.request("session/new", {"cwd": self.cwd, "mcpServers": mcp_servers or []}, timeout=120)
         sid = res.get("sessionId") if isinstance(res, dict) else None
         if not isinstance(sid, str) or not sid:
             raise AcpError("session/new returned no sessionId")
         return sid
 
-    async def load_session(self, sid: str) -> bool:
+    async def load_session(self, sid: str, mcp_servers: Optional[List[Dict[str, Any]]] = None) -> bool:
         """Resume a session after a restart, when the agent supports it. Its replayed updates are dropped (no turn)."""
         if not self.capabilities.get("loadSession"):
             return False
         try:
-            await self.request("session/load", {"sessionId": sid, "cwd": self.cwd, "mcpServers": []}, timeout=120)
+            await self.request("session/load", {"sessionId": sid, "cwd": self.cwd, "mcpServers": mcp_servers or []},
+                               timeout=120)
             return True
         except (AcpError, asyncio.TimeoutError):
             return False

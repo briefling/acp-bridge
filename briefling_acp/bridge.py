@@ -1,9 +1,17 @@
 """The bridge: one outbound WebSocket to the briefling hub (same wire as the Hermes plugin, protocol v2), one ACP agent
 process, one ACP session per briefling conversation (thread or Lounge topic).
 
-Hub -> bridge: `deliver` (a human's message), `turn.stop` (Stop button), `subscribed`, `error`.
+Hub -> bridge: `deliver` (a human's message), `turn.stop` (Stop button), `subscribed`, `error`, and the answers to
+the tool frames (`ack`, `resource.result`, `memory.result`, `memory.proposed`, `error` with `ref`).
 Bridge -> hub: `subscribe`, `turn.started` / `turn.ended`, `message.final` (one message per turn, streamed through
-successive edits: same msg_id, growing rev), `status` (tool in progress, ephemeral), `ping`.
+successive edits: same msg_id, growing rev), `status` (tool in progress, ephemeral), `ping`, and the frames of
+briefling's tools (`thread.outcome`, `thread.propose`, `issue.propose`, `about.propose`, `resource.acquire|release`,
+`ci.watch`, `memory.search|read|propose`), the same as the Hermes plugin's.
+
+Tools: the agent gets them from a local MCP server (`briefling-acp mcp`, declared in `session/new`), which relays each
+call to this process over a Unix socket in a directory only this user can open. Each conversation's server carries
+its own random token, so a call is tied to its conversation, and it only counts while that conversation has a turn
+running (the hub checks the turn again).
 
 Gates (the hub already applied its own: membership, roles): a message or a Stop counts only if its author is in
 BRIEFLING_ALLOWED_USERS (the trusted humans the hub listed at join, Cognito subs). Empty list = nobody (fail closed).
@@ -16,14 +24,19 @@ import logging
 import os
 import re
 import secrets
+import sys
+import tempfile
 import time
 from collections import OrderedDict, deque
 from typing import Any, Dict, List, Optional, Set
 
 import aiohttp
 
+from . import tools as tl
 from .acp import AcpAgent, AcpError
 from .join import PROTOCOL, PROTOCOL_VERSION
+from .mcp import SOCKET_ENV, TOKEN_ENV
+from .tooldefs import HUB_UNREACHABLE, NO_TEXT, with_context
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +60,11 @@ NO_REPLY = "(the agent ended its turn without a reply: {reason})"
 AGENT_DOWN = ("(the agent could not run this turn: {why}. The bridge log on the agent host has the details; "
               "for Kiro, check `kiro-cli whoami`.)")
 REFUSED = "Refused (not pre-authorized in the agent's own configuration): {title}"
+TOOLS_HINT = ("briefling's tools need a one-time allow rule in the agent's config (Kiro: `@briefling` in the agent's "
+              "allowedTools, or a `mcp` allow rule for `briefling/*` in V3 permissions); see the bridge README.")
+MCP_SERVER = "briefling"   # the MCP server's name in the agent (Kiro: tools @briefling/<tool>)
+REQUEST_TIMEOUT_S = 20.0   # the hub's answer to a tool frame (as the plugin)
+SOCKET_LINE_MAX = 1 << 20
 
 
 def new_id() -> str:
@@ -59,21 +77,34 @@ def new_id() -> str:
 
 
 def prompt_text(frame: Dict[str, Any]) -> str:
-    """What the agent receives: one line of context (where, who), then the human's text as is."""
+    """What the agent receives: one line (where, who), then the same context as a Hermes agent (space description,
+    resources, repos, Lounge rules, unseen messages quoted as data: the plugin's `with_context`), then the text."""
     ctx = frame.get("context") if isinstance(frame.get("context"), dict) else {}
     msg = frame.get("message") or {}
     kind = "Lounge topic" if ctx.get("kind") == "topic" else "thread"
     title = str(ctx.get("title") or "")[:200]
     who = str(frame.get("author_name") or "a human")[:100]
-    head = f"[briefling {kind} \"{title}\", message from {who}]"
-    unseen = [u for u in (ctx.get("unseen") or []) if isinstance(u, dict) and isinstance(u.get("text"), str)]
-    if unseen:  # messages of the conversation the agent has not seen: quoted data, not instructions
-        quoted = "\n".join(f"> {str(u.get('who') or '?')[:100]}: " + u["text"][:4000].replace("\n", "\n> ") for u in unseen[-20:])
-        head += f"\n[Earlier messages in this conversation, for context only:]\n{quoted}"
+    head = f"[briefling {kind} \"{title}\", message from {who}]\n"
     files = msg.get("files") or frame.get("files") or []
     if files:
-        head += f"\n[{len(files)} attachment(s) not forwarded: this bridge relays text only]"
-    return f"{head}\n\n{msg.get('text') or ''}"
+        head += f"[{len(files)} attachment(s) not forwarded: this bridge relays text only]\n"
+    return head + with_context(ctx, str(msg.get("text") or ""))
+
+
+def is_briefling_tool(title: str) -> bool:
+    """A permission request about one of briefling's tools (only used for a hint: the request is refused anyway)."""
+    return any(re.search(rf"(?<![A-Za-z0-9_]){n}(?![A-Za-z0-9_])", title) for n in tl.NAMES)
+
+
+class HubRefused(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def socket_dir() -> str:
+    """A fresh private directory for the socket (tests, or no credentials file)."""
+    return tempfile.mkdtemp(prefix="briefling-acp-")
 
 
 class Turn:
@@ -94,7 +125,7 @@ class Turn:
         self.late: Optional[asyncio.Task] = None
 
     def reply(self) -> str:
-        notes = "\n".join(f"_{REFUSED.format(title=t)}_" for t in self.refused)
+        notes = "\n".join(f"_{t if t == TOOLS_HINT else REFUSED.format(title=t)}_" for t in self.refused)
         return (self.text.strip() + ("\n\n" + notes if notes else "")).strip()
 
     async def flush(self, force: bool = False) -> None:
@@ -143,11 +174,14 @@ class Turn:
         title = str(tc.get("title") or tc.get("kind") or "a tool call")[:MAX_STATUS]
         logger.warning("permission refused in thread %s: %s", self.thread, title)
         self.refused.append(title)
+        if is_briefling_tool(title) and TOOLS_HINT not in self.refused:
+            self.refused.append(TOOLS_HINT)
         await self.flush(force=True)
 
 
 class Bridge:
-    def __init__(self, env: Dict[str, str], command: List[str], cwd: str, state_path: Optional[str] = None):
+    def __init__(self, env: Dict[str, str], command: List[str], cwd: str, state_path: Optional[str] = None,
+                 socket_path: Optional[str] = None):
         self.ws_url = env.get("BRIEFLING_WS_URL", "")
         self.token_url = env.get("BRIEFLING_TOKEN_URL", "")
         self.client_id = env.get("BRIEFLING_CLIENT_ID", "")
@@ -176,6 +210,11 @@ class Bridge:
         self.last_turn_at: Dict[str, int] = {}
         self.running = False
         self.connected = asyncio.Event()
+        self.waiting: Dict[str, asyncio.Future] = {}  # client_id -> hub answer to a tool frame
+        self.socket_path = socket_path
+        self.socket_server: Optional[asyncio.AbstractServer] = None
+        self.tokens: Dict[str, str] = {}  # MCP token -> thread (this process only: a restart issues new ones)
+        self.thread_token: Dict[str, str] = {}
 
     # -- state ----------------------------------------------------------------------
 
@@ -243,6 +282,7 @@ class Bridge:
             logger.error("the agent command failed to start: %s. Its stderr: %s", e, self.agent.stderr_tail.strip()[-800:] or "-")
             await self.agent.stop()
             raise SystemExit(1)
+        await self._start_socket()
         self.session = aiohttp.ClientSession()
         backoff = 0
         try:
@@ -280,6 +320,13 @@ class Bridge:
         for t in list(self.tasks):
             t.cancel()
         await self.agent.stop()
+        if self.socket_server is not None:
+            self.socket_server.close()
+            self.socket_server = None
+            try:
+                os.unlink(self.socket_path)
+            except OSError:
+                pass
         if self.ws is not None and not self.ws.closed:
             await self.ws.close()
         if self.session:
@@ -323,7 +370,14 @@ class Bridge:
         elif kind == "subscribed":
             if frame.get("denied"):
                 logger.warning("hub refused spaces: %s", ",".join(map(str, frame["denied"])))
+        elif kind in ("ack", "resource.result", "memory.result", "memory.proposed"):
+            fut = self.waiting.pop(str(frame.get("client_id")), None)
+            if fut and not fut.done():
+                fut.set_result(frame)
         elif kind == "error":
+            fut = self.waiting.pop(str(frame.get("ref")), None)
+            if fut and not fut.done():
+                fut.set_exception(HubRefused(str(frame.get("code") or "error")))
             logger.warning("hub error: %s %s", frame.get("code"), str(frame.get("detail") or "")[:200])
 
     # -- turns ------------------------------------------------------------------------
@@ -350,10 +404,10 @@ class Bridge:
         if self.agent.proc.pid != self.agent_pid:  # a new process: it knows none of the sessions yet
             self.agent_pid, self.loaded = self.agent.proc.pid, set()
         sid = self.sessions.get(thread)
-        if sid and (sid in self.loaded or await self.agent.load_session(sid)):
+        if sid and (sid in self.loaded or await self.agent.load_session(sid, self.mcp_servers(thread))):
             self.loaded.add(sid)
             return sid
-        sid = await self.agent.new_session()
+        sid = await self.agent.new_session(self.mcp_servers(thread))
         self.sessions[thread] = sid
         self.loaded.add(sid)
         self._save_state()
@@ -403,3 +457,105 @@ class Bridge:
             return  # the turn already ended
         self.stop_by[thread] = by
         await self.agent.cancel(sid)
+
+    # -- briefling's tools (MCP server <-> Unix socket <-> hub) -------------------------
+
+    def mcp_servers(self, thread: str) -> List[Dict[str, Any]]:
+        """The MCP server declared in session/new|load for this conversation: this package's `mcp` subcommand, with
+        the socket path and this conversation's token in its environment (ACP stdio server, mandatory for agents)."""
+        if self.socket_server is None:
+            return []
+        token = self.thread_token.get(thread)
+        if token is None:
+            token = secrets.token_urlsafe(32)
+            self.thread_token[thread], self.tokens[token] = token, thread
+        pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return [{"name": MCP_SERVER, "command": sys.executable, "args": ["-m", "briefling_acp", "mcp"],
+                 "env": [{"name": SOCKET_ENV, "value": self.socket_path}, {"name": TOKEN_ENV, "value": token},
+                         {"name": "PYTHONPATH", "value": pkg_parent}]}]
+
+    async def _start_socket(self) -> None:
+        if self.socket_path is None:
+            self.socket_path = os.path.join(socket_dir(), "mcp.sock")
+        d = os.path.dirname(self.socket_path)
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        os.chmod(d, 0o700)  # macOS ignores a socket's own mode: the directory is the gate
+        try:
+            os.unlink(self.socket_path)  # left by a previous run
+        except FileNotFoundError:
+            pass
+        old = os.umask(0o177)
+        try:
+            self.socket_server = await asyncio.start_unix_server(self._on_socket, path=self.socket_path,
+                                                                 limit=SOCKET_LINE_MAX)
+        finally:
+            os.umask(old)
+        os.chmod(self.socket_path, 0o600)
+
+    async def _on_socket(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            line = await asyncio.wait_for(reader.readline(), 10)
+            try:
+                req = json.loads(line)
+            except ValueError:
+                req = None
+            res = await self.tool_call(req) if isinstance(req, dict) else {"ok": False, "error": "bad_request"}
+            writer.write((json.dumps(res, ensure_ascii=False) + "\n").encode())
+            await writer.drain()
+        except (asyncio.TimeoutError, ConnectionError, asyncio.LimitOverrunError, ValueError):
+            pass
+        finally:
+            writer.close()
+
+    def _thread_of(self, token: str) -> Optional[str]:
+        if token:
+            return self.tokens.get(token)
+        # Server declared in the agent's own config (no token): only unambiguous with exactly one turn running.
+        running = list(self.turns)
+        return running[0] if len(running) == 1 else None
+
+    async def tool_call(self, req: Dict[str, Any]) -> Dict[str, Any]:
+        """One call from the MCP server: check token, turn and arguments, send the frame, shape the hub's answer."""
+        tool, args, token = req.get("tool"), req.get("args"), str(req.get("token") or "")
+        if tool not in tl.BUILD or not isinstance(args, dict):
+            return {"ok": False, "error": "bad_request", "detail": "unknown tool"}
+        thread = self._thread_of(token)
+        if thread is None:
+            if token:
+                return {"ok": False, "error": "forbidden", "detail": "unknown token: restart this conversation's session"}
+            return {"ok": False, "error": "no_turn", "detail": (
+                "the bridge cannot tell which conversation this call belongs to: no turn, or several at once. "
+                "This happens when briefling's MCP server comes from the agent's own config instead of the session.")}
+        turn = self.turns.get(thread)
+        if turn is None:
+            return {"ok": False, "error": "no_turn", "detail": "Only during a turn triggered by a trusted human in this conversation."}
+        frame, err = tl.BUILD[tool](args)
+        if err:
+            return {"ok": False, "error": "bad_args", "detail": err}
+        early = STATUS_AFTER_S - (time.monotonic() - turn.started)
+        if early > 0:  # like status: a frame right after turn.started can be handled first and refused no_turn (seen live)
+            await asyncio.sleep(early)
+        if tool == "turn_outcome" and frame["outcome"] == "waiting":
+            if not turn.reply():
+                return {"ok": False, "error": "no_text", "detail": NO_TEXT}
+            await turn.flush(force=True)  # the human sees the answer before the banner
+        logger.info("tool %s in %s", tool, thread)
+        try:
+            answer = await self.request({**frame, "thread": thread})
+        except HubRefused as e:
+            return tl.refused(tool, e.code)
+        except (ConnectionError, asyncio.TimeoutError):
+            return dict(HUB_UNREACHABLE)
+        return tl.result(tool, frame, answer)
+
+    async def request(self, frame: Dict[str, Any], timeout: float = REQUEST_TIMEOUT_S) -> Dict[str, Any]:
+        """Send a frame with a fresh client_id and wait for the hub's answer (or its `error` with that ref)."""
+        cid = new_id()
+        fut = asyncio.get_running_loop().create_future()
+        self.waiting[cid] = fut
+        try:
+            if not await self.send({**frame, "client_id": cid}):
+                raise ConnectionError("hub not connected")
+            return await asyncio.wait_for(fut, timeout)
+        finally:
+            self.waiting.pop(cid, None)

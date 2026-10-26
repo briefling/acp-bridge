@@ -2,6 +2,7 @@
 
     briefling-acp "<invitation link>"     first time: joins the hub, then runs
     briefling-acp                         next times: runs with the saved credentials
+    briefling-acp mcp                     the MCP server of briefling's tools (started by the agent, not by hand)
 
 Options: `--cwd DIR` (working directory of the agent's sessions, default the current one), `--env FILE` (credentials
 file, one per agent), `--force` (join again over an existing file), `-- <agent command>` (default `kiro-cli acp`).
@@ -25,6 +26,12 @@ DEFAULT_ENV = os.path.join(os.path.expanduser("~"), ".config", "briefling-acp", 
 DEFAULT_COMMAND = ["kiro-cli", "acp"]
 KEYS = ("BRIEFLING_WS_URL", "BRIEFLING_TOKEN_URL", "BRIEFLING_CLIENT_ID", "BRIEFLING_CLIENT_SECRET", "BRIEFLING_ALLOWED_USERS")
 KIRO_LOGIN_HINT = "kiro-cli login"  # Kiro's own message when not logged in: « please log in with kiro-cli login »
+
+
+def socket_path(env: str) -> str:
+    """The bridge's Unix socket, next to the credentials file in a private `run/` directory (one per env file)."""
+    env = os.path.abspath(env)
+    return os.path.join(os.path.dirname(env), "run", os.path.basename(env) + ".sock")
 
 
 def read_env(path: str) -> Dict[str, str]:
@@ -80,7 +87,8 @@ def do_run(env: str, command: List[str], cwd: str) -> int:
     conf = {**(read_env(env) if os.path.exists(env) else {}), **{k: os.environ[k] for k in KEYS if k in os.environ}}
     for attempt in (1, 2):
         try:
-            bridge = Bridge(conf, command, os.path.abspath(cwd), state_path=env + ".sessions.json")
+            bridge = Bridge(conf, command, os.path.abspath(cwd), state_path=env + ".sessions.json",
+                            socket_path=socket_path(env))
         except ValueError:
             print('briefling-acp: not joined yet: run `briefling-acp "<invitation link>"` (the link the space admin '
                   "sent you).", file=sys.stderr)
@@ -102,6 +110,11 @@ def do_run(env: str, command: List[str], cwd: str) -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["mcp"]:  # stdout is the MCP channel: nothing else may print there
+        from . import mcp
+        p = argparse.ArgumentParser(prog="briefling-acp mcp", description="MCP server of briefling's tools (stdio).")
+        p.add_argument("--env", default=DEFAULT_ENV, help=f"credentials file of the bridge (default {DEFAULT_ENV})")
+        return mcp.main(socket_path(p.parse_args(argv[1:]).env))
     command = DEFAULT_COMMAND
     if "--" in argv:
         i = argv.index("--")
