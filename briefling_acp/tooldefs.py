@@ -11,6 +11,11 @@ from typing import Any, Dict
 
 MAX_BRIEF = 1500  # protocol/frames.ts MAX_BRIEF
 MAX_ACTION = 200  # protocol/frames.ts MAX_ACTION
+SUMMARY_STATUS_MAX = 500  # protocol/frames.ts SUMMARY_* (thread summary sent with turn_outcome)
+SUMMARY_ITEMS_MAX = 8
+SUMMARY_ITEM_MAX = 300
+SUMMARY_WHO_MAX = 60
+SUMMARY_WAITING_MAX = 120
 
 
 NO_TEXT = ("Nothing was posted in this thread during this turn: the human would see only the banner. Write your "
@@ -61,7 +66,7 @@ OUTCOME_ERRORS = {
     "not_thread": "This is a Lounge topic: no turn outcome here (a topic never waits on anyone).",
     "no_turn": "Only during a turn triggered by a trusted human in this thread.",
     "forbidden": "Not allowed for this instance.",
-    "bad_frame": "Invalid outcome (done | waiting) or action (1-200 chars, required for waiting).",
+    "bad_frame": "Invalid outcome (done | waiting), action (1-200 chars, required for waiting) or summary.",
     "parked": "You are waiting for a resource: end your turn without turn_outcome; the hub resumes this thread.",
 }
 
@@ -331,7 +336,9 @@ OUTCOME_SCHEMA = {
         "If you are still working or waiting on a third party, don't call it. "
         "In a space you may hold a limited number of threads at once (one in strict mode): 'done' frees your place "
         "for the next waiting thread; 'waiting' (or a pending question) keeps it, so say 'done' as soon as the task is "
-        "really over. Never call it after acquire_resource answered granted=false: just end your turn."
+        "really over. Never call it after acquire_resource answered granted=false: just end your turn. "
+        "Add a 'summary' whenever the thread moved: it replaces the summary shown at the top of the thread, so it "
+        "describes the whole thread (not only this turn), for a human who did not read it."
     ),
     "parameters": {
         "type": "object",
@@ -340,10 +347,75 @@ OUTCOME_SCHEMA = {
             "action": {"type": "string", "description": (
                 "Required for 'waiting': the action expected from the human, one short imperative line (max 200 chars), "
                 "in the team's language. A label for the banner, never the answer itself.")},
+            "summary": {
+                "type": "object",
+                "description": (
+                    "Optional: the summary of the whole thread, in the thread's language, short lines. Only facts from "
+                    "the thread; a decision is something a human explicitly accepted, not a proposal."),
+                "properties": {
+                    "status": {"type": "string", "description": f"Where the work stands, 1-2 sentences (max {SUMMARY_STATUS_MAX} chars)."},
+                    "decisions": {"type": "array", "items": {"type": "string"},
+                                  "description": f"Decisions taken by the humans, max {SUMMARY_ITEMS_MAX}, {SUMMARY_ITEM_MAX} chars each."},
+                    "next_steps": {"type": "array", "description": f"Next concrete actions, max {SUMMARY_ITEMS_MAX}.",
+                                   "items": {"type": "object", "properties": {
+                                       "who": {"type": "string", "description": f"Who acts (max {SUMMARY_WHO_MAX} chars)."},
+                                       "what": {"type": "string", "description": f"The action (max {SUMMARY_ITEM_MAX} chars)."}},
+                                       "required": ["who", "what"]}},
+                    "waiting_on": {"type": ["string", "null"],
+                                   "description": f"Who must act for the thread to move on, or null (max {SUMMARY_WAITING_MAX} chars)."},
+                },
+                "required": ["status"],
+            },
         },
         "required": ["outcome"],
     },
 }
+
+
+def _one_line(x: Any, limit: int, what: str):
+    if not isinstance(x, str) or not " ".join(x.split()):
+        return None, f"summary {what} must be a non-empty string."
+    s = " ".join(x.split())
+    return (s, None) if len(s) <= limit else (None, f"summary {what} too long ({len(s)} chars, max {limit}).")
+
+
+def clean_summary(raw: Any):
+    """Checks and normalizes turn_outcome's optional summary like the hub (protocol/frames.ts cleanTurnSummary).
+    Returns (summary or None when absent, error message or None)."""
+    if raw is None:
+        return None, None
+    if not isinstance(raw, dict):
+        return None, "summary must be an object {status, decisions, next_steps, waiting_on}."
+    status, err = _one_line(raw.get("status"), SUMMARY_STATUS_MAX, "status")
+    if err:
+        return None, err
+    decs, nexts = raw.get("decisions") or [], raw.get("next_steps") or []
+    if not isinstance(decs, list) or not isinstance(nexts, list):
+        return None, "summary decisions and next_steps must be lists."
+    if len(decs) > SUMMARY_ITEMS_MAX or len(nexts) > SUMMARY_ITEMS_MAX:
+        return None, f"summary: at most {SUMMARY_ITEMS_MAX} decisions and {SUMMARY_ITEMS_MAX} next steps."
+    decisions = []
+    for d in decs:
+        d, err = _one_line(d, SUMMARY_ITEM_MAX, "decision")
+        if err:
+            return None, err
+        decisions.append(d)
+    next_steps = []
+    for e in nexts:
+        if not isinstance(e, dict):
+            return None, "summary next_steps items must be {who, what}."
+        who, err = _one_line(e.get("who"), SUMMARY_WHO_MAX, "next step 'who'")
+        what, err2 = _one_line(e.get("what"), SUMMARY_ITEM_MAX, "next step 'what'")
+        if err or err2:
+            return None, err or err2
+        next_steps.append({"who": who, "what": what})
+    w = raw.get("waiting_on")
+    waiting_on = None
+    if w is not None and not (isinstance(w, str) and not w.strip()):
+        waiting_on, err = _one_line(w, SUMMARY_WAITING_MAX, "waiting_on")
+        if err:
+            return None, err
+    return {"status": status, "decisions": decisions, "next_steps": next_steps, "waiting_on": waiting_on}, None
 
 
 RESOURCE_PARAMS = {

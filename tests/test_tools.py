@@ -60,6 +60,15 @@ async def test_agent_lists_the_tools_and_ends_its_turn_with_done(env):
     assert res["ok"] is True and res["detail"] == "Thread marked as finished." and "memory_propose" in res["memory"] and not err
 
 
+def test_build_outcome_carries_the_checked_summary():
+    f, err = tools.build_outcome({"outcome": "done", "summary": {"status": " Merged.\n", "next_steps": [{"who": "a", "what": " b "}]}})
+    assert not err and f["summary"] == {"status": "Merged.", "decisions": [], "next_steps": [{"who": "a", "what": "b"}], "waiting_on": None}
+    f, err = tools.build_outcome({"outcome": "done"})
+    assert not err and "summary" not in f
+    f, err = tools.build_outcome({"outcome": "done", "summary": {"status": "ok", "decisions": [1]}})
+    assert f is None and "decision" in err
+
+
 async def test_waiting_needs_text_posted_first_and_flushes_it_before_the_frame(env):
     hub, _ = env
     await hub.push(deliver("t1", 'TOOL turn_outcome {"outcome": "waiting", "action": "approve PR #1"}'))

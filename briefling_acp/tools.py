@@ -50,7 +50,11 @@ def build_outcome(args: Dict[str, Any]) -> Built:
         return None, "action is required for 'waiting': what must the human do?"
     if len(action) > td.MAX_ACTION:
         return None, f"action too long ({len(action)} chars, max {td.MAX_ACTION}): one short line."
-    return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {})}, None
+    summary, err = td.clean_summary(args.get("summary"))
+    if err:
+        return None, err
+    return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {}),
+            **({"summary": summary} if summary else {})}, None
 
 
 def build_propose(args: Dict[str, Any]) -> Built:
