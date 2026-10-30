@@ -13,7 +13,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import tooldefs as td
 
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.ACQUIRE_SCHEMA,
-           td.RELEASE_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA]
+           td.RELEASE_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
+           td.TOPIC_TITLE_SCHEMA]
 NAMES = [s["name"] for s in SCHEMAS]
 
 Built = Tuple[Optional[Dict[str, Any]], Optional[str]]  # (frame without `thread`, None) or (None, message)
@@ -86,6 +87,15 @@ def build_about(args: Dict[str, Any]) -> Built:
     return {"type": "about.propose", "text": text, **({"why": why[:500]} if why else {})}, None
 
 
+def build_title(args: Dict[str, Any]) -> Built:
+    title = _one_line(args, "title")
+    if not title:
+        return None, "title is required: one short line."
+    if len(title) > td.TOPIC_HEADING_MAX:
+        return None, f"title too long ({len(title)} chars, max {td.TOPIC_HEADING_MAX}): shorten it."
+    return {"type": "topic.title", "title": title}, None
+
+
 def _resource(kind: str) -> Callable[[Dict[str, Any]], Built]:
     def build(args: Dict[str, Any]) -> Built:
         resource = _s(args, "resource")
@@ -148,7 +158,7 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "turn_outcome": build_outcome, "propose_thread": build_propose, "propose_issue": build_issue,
     "propose_space_about": build_about, "acquire_resource": _resource("resource.acquire"),
     "release_resource": _resource("resource.release"), "pushed_commits": build_pushed, "memory_search": build_search,
-    "memory_read": build_read, "memory_propose": build_memory_propose,
+    "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
 }
 assert set(BUILD) == set(NAMES)
 
@@ -156,7 +166,7 @@ ERRORS = {
     "turn_outcome": td.OUTCOME_ERRORS, "propose_thread": td.PROPOSE_ERRORS, "propose_issue": td.ISSUE_ERRORS,
     "propose_space_about": td.ABOUT_ERRORS, "acquire_resource": td.RESOURCE_ERRORS, "release_resource": td.RESOURCE_ERRORS,
     "pushed_commits": td.CI_ERRORS, "memory_search": td.MEMORY_ERRORS, "memory_read": td.MEMORY_ERRORS,
-    "memory_propose": td.MEMORY_ERRORS,
+    "memory_propose": td.MEMORY_ERRORS, "topic_title": td.TITLE_ERRORS,
 }
 
 
@@ -192,6 +202,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
             f'{resource} is in use by thread "{holder}"{where}. Do NOT use it. Stop here: end your turn now with a '
             f"one-line message saying what you wait for, and do NOT call turn_outcome. The hub resumes this thread "
             f"with a new message when {resource} is yours.")}
+    if tool == "topic_title":
+        return {"ok": True, "detail": "Title shown in the Lounge list. Nothing else to do for it."}
     if tool == "release_resource":
         return {"ok": True, "detail": f"{frame['resource']} released."}
     if tool == "pushed_commits":

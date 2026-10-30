@@ -23,6 +23,7 @@ NO_TEXT = ("Nothing was posted in this thread during this turn: the human would 
 
 
 MAX_ABOUT = 4000  # protocol/frames.ts MAX_ABOUT (space description, admin-written)
+TOPIC_HEADING_MAX = 60  # protocol/frames.ts TOPIC_HEADING_MAX (topic title; the hub cleans it again)
 NEW_ISSUE_TITLE_MAX = 256  # protocol/frames.ts NEW_ISSUE_TITLE_MAX (GitHub's limit)
 NEW_ISSUE_BODY_MAX = 20_000  # protocol/frames.ts NEW_ISSUE_BODY_MAX
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")  # owner/name (fullmatch)
@@ -88,6 +89,17 @@ ABOUT_ERRORS = {
     "not_in_charge": "Only the space's agent in charge drafts its description.",
     "forbidden": "Not allowed for this instance.",
     "bad_frame": f"Invalid draft (1-{MAX_ABOUT} chars, reason <= 500).",
+}
+
+
+TITLE_ERRORS = {
+    "not_topic": "Only for a Lounge topic, when briefling asks you for its title.",
+    "no_turn": "Only during your turn in this conversation.",
+    "not_in_charge": "Only the topic's agent in charge titles it.",
+    "not_trusted": "This topic was not opened by a lead of the space: you do not title it.",
+    "already_titled": "This topic already has a title: nothing to do.",
+    "forbidden": "Not allowed for this instance.",
+    "bad_frame": f"Invalid title: one line of plain text, at most {TOPIC_HEADING_MAX} characters.",
 }
 
 
@@ -233,6 +245,10 @@ def with_context(context: Dict[str, Any], text: str) -> str:
                  "a cloud resource, or using a shared resource. For those, or when a human wants to move to implementation, "
                  "call the propose_thread tool (short title, one-sentence reason, 3 to 5 line brief); "
                  "briefling shows the card and a human opens the thread.]\n")
+    if context.get("name_topic") is True:
+        head += (f"[This new topic has no title yet: call topic_title once with a short title (max {TOPIC_HEADING_MAX} "
+                 "characters, plain text, in the message's language) drawn from the message addressed to you, then "
+                 "answer that message as usual.]\n")
     if not unseen:
         return head + text if head else text
     lines, total = [], 0
@@ -319,6 +335,26 @@ ABOUT_SCHEMA = {
             "why": {"type": "string", "description": "One sentence: what you based it on, or what you changed (shown on the card)."},
         },
         "required": ["text"],
+    },
+}
+
+
+TOPIC_TITLE_SCHEMA = {
+    "name": "topic_title",
+    "description": (
+        "briefling only, when briefling asks you to title a new Lounge topic (in the message context, or a request "
+        "that quotes the topic's first message): give the topic its short title, shown in bold in the Lounge list. "
+        "Once per topic, drawn from its first message only, naming the subject. Plain text: no Markdown, no quotes, "
+        "no final period."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": (
+                f"At most {TOPIC_HEADING_MAX} characters, one line, in the language of the message "
+                "(e.g. 'Badge: the 6 is misaligned', 'Publier le catalogue comme index ?').")},
+        },
+        "required": ["title"],
     },
 }
 

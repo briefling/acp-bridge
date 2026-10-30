@@ -196,3 +196,11 @@ def test_tool_schemas_are_the_plugins_own():
 def test_version_matches_pyproject():
     meta = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
     assert meta["project"]["version"] == __version__
+
+
+def test_build_title_one_line_bounded():
+    assert tools.build_title({"title": " Firmware\n 2.4 "}) == ({"type": "topic.title", "title": "Firmware 2.4"}, None)
+    assert tools.build_title({"title": " "})[0] is None
+    assert "too long" in tools.build_title({"title": "a" * 61})[1]
+    assert "already has a title" in tools.refused("topic_title", "already_titled")["detail"]
+    assert "Lounge list" in tools.result("topic_title", {}, {})["detail"]
