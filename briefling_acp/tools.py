@@ -181,15 +181,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         if frame["outcome"] == "waiting":
             return {"ok": True, "detail": "Shown in the thread: the human sees what you wait for."}
         return {"ok": True, "detail": "Thread marked as finished.", "memory": td.MEMORY_NUDGE}
-    if tool == "propose_thread":
-        return {"ok": True, "card": answer.get("msg_id"),
-                "detail": "Card shown in this conversation; a human decides whether to open the thread."}
-    if tool == "propose_issue":
-        return {"ok": True, "card": answer.get("msg_id"),
-                "detail": "Card shown in this conversation; nothing is on GitHub until a trusted human clicks Create the issue."}
-    if tool == "propose_space_about":
-        return {"ok": True, "card": answer.get("msg_id"),
-                "detail": "Draft shown in the topic; the admin reviews it, applies it to the space settings and saves."}
+    if tool in td.CARD_SHOWN:
+        return {"ok": True, "card": answer.get("msg_id"), "detail": td.CARD_SHOWN[tool]}
     if tool == "acquire_resource":
         resource = frame["resource"]
         if answer.get("granted") is True:

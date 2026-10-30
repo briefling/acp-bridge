@@ -30,6 +30,16 @@ REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")  # owner/na
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+# Returned when the hub accepted a turn card. The client shows these cards right AFTER the agent's text of the turn
+# (client/src/order.ts), though the hub stores them mid-turn: say it, or the model guesses « above » (the old display).
+_AFTER_TEXT = "shown in this conversation right after your text of this turn (below it, never above)"
+CARD_SHOWN = {
+    "propose_thread": f"Card {_AFTER_TEXT}; a human decides whether to open the thread.",
+    "propose_issue": f"Card {_AFTER_TEXT}; nothing is on GitHub until a trusted human clicks Create the issue.",
+    "propose_space_about": f"Draft {_AFTER_TEXT}; the admin reviews it, applies it to the space settings and saves.",
+}
+
+
 # Returned with a successful turn_outcome 'done': a suggestion, never an obligation (no extra call, no frame).
 MEMORY_NUDGE = (
     "Optional, before you stop: did this thread verify a durable fact about the project (a decision and its reason, "

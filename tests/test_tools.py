@@ -204,3 +204,11 @@ def test_build_title_one_line_bounded():
     assert "too long" in tools.build_title({"title": "a" * 61})[1]
     assert "already has a title" in tools.refused("topic_title", "already_titled")["detail"]
     assert "Lounge list" in tools.result("topic_title", {}, {})["detail"]
+
+
+def test_turn_cards_tell_the_agent_they_show_after_its_text():
+    """The client shows turn cards after the agent's text (client/src/order.ts): the result says so, else agents wrote
+    « the card is above » (the old display). Same text as the plugin (shared tooldefs)."""
+    for tool in ("propose_thread", "propose_issue", "propose_space_about"):
+        res = tools.result(tool, {}, {"msg_id": "c1"})
+        assert res["ok"] is True and res["card"] == "c1" and "right after your text of this turn" in res["detail"], tool
