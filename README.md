@@ -12,7 +12,7 @@ project memory) through a local MCP server the bridge declares in each session.
 On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-pipx install "git+https://github.com/briefling/acp-bridge@v0.3.2"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.3.3"
 cd <the folder Kiro will work in>
 briefling-acp "<invitation link>"
 ```
@@ -29,9 +29,13 @@ the join: the bridge only answers them. In the space settings the invitation the
 Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
 agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
-pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.2"`.
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.3"`.
 
 ## What the bridge does, and does not
+
+How a turn and a tool call flow through the bridge, and what to check when Kiro answers « Refused »:
+[docs/kiro-integration.md](docs/kiro-integration.md).
+
 
 - **Who can drive the agent**: only the humans listed in `BRIEFLING_ALLOWED_USERS` (the space's trusted humans at join
   time, Cognito ids). A message or a Stop from anyone else is dropped. Someone made trusted later must be added there.
@@ -85,7 +89,7 @@ request. Allow them once in Kiro's config (the reply says so when they are refus
 ## Tests
 
 ```sh
-cd acp-bridge && python -m pytest -q          # needs aiohttp, pytest, pytest-asyncio
+python -m pytest -q          # from the repo root (`acp-bridge/` in the briefling repo); needs aiohttp, pytest, pytest-asyncio
 ```
 
 `tests/fake_agent.py` is a scripted ACP agent; the tests run the bridge against a fake hub.

@@ -45,6 +45,7 @@ CONTEXT_TOTAL_MAX = 12000
 
 
 PROPOSE_ERRORS = {
+    "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
     "not_topic": "This hub only accepts the card in a Lounge topic: do the work here in this thread.",
     "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
     "already_proposed": "A card is already waiting in this conversation: let the humans decide.",
@@ -54,6 +55,7 @@ PROPOSE_ERRORS = {
 
 
 ISSUE_ERRORS = {
+    "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
     "not_board": "This space is not driven by a GitHub board: no issue card here (a human can use → Issue on a thread).",
     "repo_not_attached": "That repo is not attached to this space: use one of the repos listed in the message context.",
     "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
@@ -64,6 +66,7 @@ ISSUE_ERRORS = {
 
 
 OUTCOME_ERRORS = {
+    "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
     "not_thread": "This is a Lounge topic: no turn outcome here (a topic never waits on anyone).",
     "no_turn": "Only during a turn triggered by a trusted human in this thread.",
     "forbidden": "Not allowed for this instance.",
@@ -73,6 +76,7 @@ OUTCOME_ERRORS = {
 
 
 RESOURCE_ERRORS = {
+    "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
     "not_thread": "Only in a thread, not in a Lounge topic: shared resources are taken by work threads.",
     "no_turn": "Only during a turn triggered by a trusted human in this thread.",
     "unknown_resource": ("This resource is not declared in this space's settings (the admin declares them): "
@@ -104,6 +108,7 @@ TITLE_ERRORS = {
 
 
 CI_ERRORS = {
+    "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
     "not_thread": "Only in a thread, not in a Lounge topic.",
     "no_turn": "Only during a turn triggered by a trusted human in this thread.",
     "ci_off": "CI follow-up is off in this space (the admin turns it on in the space settings): nothing to declare.",
@@ -202,6 +207,9 @@ def issue_context(issue: Any) -> str:
     return out
 
 
+AGENT_NAME_RE = re.compile(r"[a-z0-9_-]{1,32}")
+
+
 def with_context(context: Dict[str, Any], text: str) -> str:
     """Prefix the delivered message with what the agent has not seen yet in this conversation.
 
@@ -236,6 +244,12 @@ def with_context(context: Dict[str, Any], text: str) -> str:
     if context.get("parallel") is True:
         head += ("[You may be working on other threads of this space at the same time: work in a git worktree "
                  "dedicated to this thread, never in a copy another thread uses.]\n")
+    in_charge = context.get("in_charge")
+    if isinstance(in_charge, str) and AGENT_NAME_RE.fullmatch(in_charge):
+        # Guest of a work thread: the hub refuses the owner's tools to it (not_in_charge); saying so saves a wasted call.
+        head += (f"[You were called into this work thread by a mention: {in_charge.capitalize()} is the agent in charge. "
+                 "Answer what you are asked here. Do not call turn_outcome, acquire_resource, release_resource, "
+                 "propose_thread, propose_issue or pushed_commits: they stay with the agent in charge.]\n")
     if context.get("kind") == "topic":
         # Product rule: the Lounge is for looking and trying, a thread for anything that changes the project.
         # Shared resources are also refused by the hub outside a thread (acquire_resource -> not_thread).
