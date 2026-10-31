@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "briefling-acp-bridge"
-version = "0.3.5"
+version = "0.3.6"
 description = "Connects an ACP agent (Kiro CLI, ...) to a briefling hub"
 readme = "README.md"
 license = { text = "MIT" }

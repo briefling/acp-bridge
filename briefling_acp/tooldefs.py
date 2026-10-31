@@ -294,13 +294,18 @@ def with_context(context: Dict[str, Any], text: str) -> str:
         head += (f"[Work in this space starts from GitHub issues. Repos attached (propose_issue may propose an issue there, "
                  f"a human creates it): {', '.join(repos)}.]\n")
     ci = [x for x in (context.get("ci") or []) if isinstance(x, str) and REPO_RE.fullmatch(x)]
+    # `pushed` present (even empty) = a hub that takes any repo: every push is declared, attached repos get their PR.
+    any_repo = isinstance(context.get("pushed"), list)
+    pushed = [x for x in (context.get("pushed") or []) if isinstance(x, str) and REPO_RE.fullmatch(x)]
     if ci:
         head += (f"[CI follow-up is on: after you push to {', '.join(ci)}, call pushed_commits with the repo, full sha "
-                 f"and branch of each pushed head; briefling shows their CI result in this thread.]\n")
-    pushed = [x for x in (context.get("pushed") or []) if isinstance(x, str) and REPO_RE.fullmatch(x)]
-    if pushed and not ci:
-        head += (f"[After you push to {', '.join(pushed)}, call pushed_commits with the repo, full sha and branch of each "
-                 f"pushed head; briefling lists them in the thread info with their pull request.]\n")
+                 f"and branch of each pushed head; briefling shows their CI result in this thread."
+                 + (" Push to any other GitHub repo: call it too, briefling lists it in the thread info." if any_repo else "")
+                 + "]\n")
+    elif any_repo:
+        prs = f", with their pull request for {', '.join(pushed)}" if pushed else ""
+        head += ("[After you push commits to a GitHub repo, call pushed_commits with the repo (owner/name), full sha and "
+                 f"branch of each pushed head; briefling lists them in the thread info{prs}.]\n")
     if context.get("parallel") is True:
         head += ("[You may be working on other threads of this space at the same time: work in a git worktree "
                  "dedicated to this thread, never in a copy another thread uses.]\n")
@@ -609,10 +614,10 @@ RELEASE_SCHEMA = {
 PUSHED_SCHEMA = {
     "name": "pushed_commits",
     "description": (
-        "briefling only, in a thread of a space with attached repos (the message context then lists them): right "
-        "after your last git push of the turn to one of those repos, declare the commit(s) you pushed (the new head of "
-        "each pushed branch, with that branch). briefling lists them in the thread info with their pull request and, "
-        "when the space has CI follow-up on, reads their CI on GitHub and shows the result in the thread. Declare only "
+        "briefling only, in a work thread: right after your last git push of the turn to a GitHub repo, declare the "
+        "commit(s) you pushed (the new head of each pushed branch, with that branch). briefling lists them in the thread "
+        "info; for the repos attached to the space (listed in the message context) it also shows their pull request "
+        "and, when the space has CI follow-up on, reads their CI on GitHub and shows the result in the thread. Declare only "
         "commits you pushed yourself in this thread; a new commit for the same repo replaces the previous one. Do not "
         "wait for any result: end your turn as usual."
     ),
@@ -624,7 +629,7 @@ PUSHED_SCHEMA = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "repo": {"type": "string", "description": "owner/name, one of the followed repos listed in the message context."},
+                        "repo": {"type": "string", "description": "owner/name of the GitHub repo you pushed to, e.g. briefling/briefling."},
                         "sha": {"type": "string", "description": "Full 40-character sha of the pushed commit (git rev-parse HEAD)."},
                         "branch": {"type": "string", "description": "Branch you pushed it to (git branch --show-current), e.g. main or feat/x."},
                     },
