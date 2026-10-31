@@ -243,6 +243,7 @@ MEMORY_TAGS_MAX = 10       # protocol/memory.ts MEMORY_TAGS_MAX / MEMORY_TAG_RE 
 MEMORY_TAG_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
 MEMORY_TAG_BATCH = 50
 MEMORY_TAGS_LISTED = 60    # protocol/memory.ts MEMORY_TAGS_LISTED
+MEMORY_MERGES_MAX = 50     # protocol/memory.ts MEMORY_MERGES_MAX
 
 
 def _tag_of(x: Any) -> Optional[str]:
@@ -259,7 +260,7 @@ def clean_tags(raw: Any, required: bool) -> Tuple[Optional[List[str]], Optional[
     if raw is None and not required:
         return [], None
     if not isinstance(raw, list) or not (1 if required else 0) <= len(raw) <= MEMORY_TAGS_MAX:
-        return None, f"tags: {'1' if required else '0'} to {MEMORY_TAGS_MAX} short tags naming what it is about (e.g. hub, deploy), as few as possible; never the space's name."
+        return None, f"tags: {'1' if required else '0'} to {MEMORY_TAGS_MAX} short English tags naming what it is about (e.g. hub, deploy), one per concept, as few as possible; never the space's name."
     out: List[str] = []
     for x in raw:
         t = _tag_of(x)
@@ -803,8 +804,10 @@ MEMORY_PROPOSE_SCHEMA = {
                         "description": f"1 to {MEMORY_SOURCES_MAX} sources (max {MEMORY_SOURCE_MAX} chars each)."},
             "tags": {"type": "array", "minItems": 1, "maxItems": MEMORY_TAGS_MAX, "items": {"type": "string"},
                      "description": (f"1 to {MEMORY_TAGS_MAX} tags naming what it is about: a component, area, tool "
-                                     "or repo (e.g. hub, client, deploy), as few as possible. Short lower-case English slugs; reuse "
-                                     "the space_tags memory_search lists before inventing one; never the project's "
+                                     "or repo (e.g. hub, client, deploy), as few as possible. Short lower-case English slugs, one per "
+                                     "concept (never an English and a French tag for the same thing: the hub maps a "
+                                     "known alias or plural to its tag); reuse the space_tags memory_search lists "
+                                     "before inventing one; never the project's "
                                      "own name nor the space's (the memory is already per space).")},
         },
         "required": ["text", "kind", "sources", "tags"],
