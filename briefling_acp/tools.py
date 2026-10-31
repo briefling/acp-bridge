@@ -151,7 +151,10 @@ def build_memory_propose(args: Dict[str, Any]) -> Built:
     sources = [" ".join(str(x or "").split()) for x in raw]
     if any(not x or len(x) > td.MEMORY_SOURCE_MAX for x in sources):
         return None, f"each source: 1 to {td.MEMORY_SOURCE_MAX} chars."
-    return {"type": "memory.propose", "text": text, "kind": kind, "sources": sources}, None
+    tags, err = td.clean_tags(args.get("tags"), required=True)
+    if err:
+        return None, err
+    return {"type": "memory.propose", "text": text, "kind": kind, "sources": sources, "tags": tags}, None
 
 
 BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
@@ -203,9 +206,7 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return {"ok": True, "detail": "Recorded: listed in the thread info (CI result shown in this thread when the space "
                                       "follows it). Nothing else to do."}
     if tool in ("memory_search", "memory_read"):
-        keep = ("id", "space", "text", "kind", "sources", "author", "thread", "at")
-        entries = [{k: e.get(k) for k in keep} for e in (answer.get("entries") or []) if isinstance(e, dict)]
-        return {"ok": True, "space": answer.get("space"), "note": td.MEMORY_DATA_NOTE, "entries": entries}
+        return td.memory_result(answer)
     if tool == "memory_propose":
         return {"ok": True, "id": answer.get("id"), "status": answer.get("status"),
                 "detail": td.MEMORY_GATES.get(str(answer.get("gate") or ""), "Recorded.")}

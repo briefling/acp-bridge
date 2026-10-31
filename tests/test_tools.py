@@ -220,3 +220,12 @@ def test_build_plan_shared_with_the_plugin():
         {"type": "plan.propose", "title": "P", "steps": [{"title": "S 1", "brief": "B"}] * 2, "repo": "acme/lab"}, None)
     assert tools.BUILD["propose_plan"]({"title": "P", "steps": [step]})[0] is None
     assert "leave repo out" in tools.refused("propose_plan", "not_board")["detail"]
+
+
+def test_memory_propose_takes_tags_like_the_plugin():
+    ok, err = tools.BUILD["memory_propose"]({"text": "x", "kind": "fact", "sources": ["s"], "tags": ["Déploiement", "hub", "HUB"]})
+    assert not err and ok["tags"] == ["deploiement", "hub"]
+    for tags in (None, [], ["a", "b", "c", "d", "e", "f"], ["no way!"]):
+        assert tools.BUILD["memory_propose"]({"text": "x", "kind": "fact", "sources": ["s"], "tags": tags})[0] is None, tags
+    res = tools.result("memory_search", {}, {"space": "sp", "entries": [{"id": "e1", "text": "t", "tags": ["hub"]}], "tags": ["hub"]})
+    assert res["entries"] == [{"id": "e1", "text": "t", "tags": ["hub"]}] and res["space_tags"] == ["hub"]
