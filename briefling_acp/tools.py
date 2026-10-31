@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import tooldefs as td
 
-SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.ACQUIRE_SCHEMA,
+SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
            td.TOPIC_TITLE_SCHEMA]
 NAMES = [s["name"] for s in SCHEMAS]
@@ -155,7 +155,7 @@ def build_memory_propose(args: Dict[str, Any]) -> Built:
 
 
 BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
-    "turn_outcome": build_outcome, "propose_thread": build_propose, "propose_issue": build_issue,
+    "turn_outcome": build_outcome, "propose_thread": build_propose, "propose_issue": build_issue, "propose_plan": td.build_plan,
     "propose_space_about": build_about, "acquire_resource": _resource("resource.acquire"),
     "release_resource": _resource("resource.release"), "pushed_commits": build_pushed, "memory_search": build_search,
     "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
@@ -163,7 +163,7 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
 assert set(BUILD) == set(NAMES)
 
 ERRORS = {
-    "turn_outcome": td.OUTCOME_ERRORS, "propose_thread": td.PROPOSE_ERRORS, "propose_issue": td.ISSUE_ERRORS,
+    "turn_outcome": td.OUTCOME_ERRORS, "propose_thread": td.PROPOSE_ERRORS, "propose_issue": td.ISSUE_ERRORS, "propose_plan": td.PLAN_ERRORS,
     "propose_space_about": td.ABOUT_ERRORS, "acquire_resource": td.RESOURCE_ERRORS, "release_resource": td.RESOURCE_ERRORS,
     "pushed_commits": td.CI_ERRORS, "memory_search": td.MEMORY_ERRORS, "memory_read": td.MEMORY_ERRORS,
     "memory_propose": td.MEMORY_ERRORS, "topic_title": td.TITLE_ERRORS,

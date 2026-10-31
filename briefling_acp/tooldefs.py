@@ -26,6 +26,8 @@ MAX_ABOUT = 4000  # protocol/frames.ts MAX_ABOUT (space description, admin-writt
 TOPIC_HEADING_MAX = 60  # protocol/frames.ts TOPIC_HEADING_MAX (topic title; the hub cleans it again)
 NEW_ISSUE_TITLE_MAX = 256  # protocol/frames.ts NEW_ISSUE_TITLE_MAX (GitHub's limit)
 NEW_ISSUE_BODY_MAX = 20_000  # protocol/frames.ts NEW_ISSUE_BODY_MAX
+PLAN_STEPS_MAX = 10  # protocol/frames.ts PLAN_STEPS_MAX (a plan has 2 to 10 steps)
+PLAN_TITLE_MAX = 120  # protocol/frames.ts PLAN_TITLE_MAX, PLAN_STEP_TITLE_MAX
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")  # owner/name (fullmatch)
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -37,6 +39,9 @@ CARD_SHOWN = {
     "propose_thread": f"Card {_AFTER_TEXT}; a human decides whether to open the thread.",
     "propose_issue": f"Card {_AFTER_TEXT}; nothing is on GitHub until a trusted human clicks Create the issue.",
     "propose_space_about": f"Draft {_AFTER_TEXT}; the admin reviews it, applies it to the space settings and saves.",
+    "propose_plan": (f"Card {_AFTER_TEXT}; nothing starts until a trusted human clicks Launch the plan. Then the steps "
+                     "run in order: each step is a thread, and ending it with turn_outcome done opens the next one "
+                     "(in a board-driven space, each step becomes an issue blocked by the previous one)."),
 }
 
 
@@ -73,6 +78,51 @@ ISSUE_ERRORS = {
     "forbidden": "Not allowed for this instance.",
     "bad_frame": f"Invalid repo, title or body (owner/name, title 1-{NEW_ISSUE_TITLE_MAX} chars on one line, body <= {NEW_ISSUE_BODY_MAX}).",
 }
+
+
+PLAN_ERRORS = {
+    "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
+    "not_board": "This space is not driven by a GitHub board: leave repo out, the steps become threads.",
+    "repo_not_attached": ("This space is driven by a GitHub board: repo is required, one of the repos listed in the "
+                          "message context (the steps become issues there)."),
+    "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
+    "already_proposed": "A card is already waiting in this conversation: let the humans decide.",
+    "forbidden": "Not allowed for this instance.",
+    "bad_frame": (f"Invalid plan: title 1-{PLAN_TITLE_MAX} chars on one line, reason <= 500, 2 to {PLAN_STEPS_MAX} "
+                  f"steps, each with a one-line title (<= {PLAN_TITLE_MAX}) and a brief (<= {MAX_BRIEF})."),
+}
+
+
+def build_plan(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None, str | None]":
+    """propose_plan arguments -> plan.propose frame (without thread/client_id), or an error for the agent. Shared by
+    the Hermes tool handler and the ACP bridge; the hub checks everything again."""
+    title = " ".join(str(args.get("title") or "").split())
+    why = str(args.get("why") or "").strip()
+    repo = str(args.get("repo") or "").strip()
+    raw = args.get("steps")
+    if not title or len(title) > PLAN_TITLE_MAX:
+        return None, f"title is required, one line, max {PLAN_TITLE_MAX} chars."
+    if not isinstance(raw, list) or not 2 <= len(raw) <= PLAN_STEPS_MAX:
+        return None, (f"steps is required: 2 to {PLAN_STEPS_MAX} items in order (one step = propose_thread; "
+                      "a longer job = several plans).")
+    steps = []
+    for i, s in enumerate(raw, 1):
+        s = s if isinstance(s, dict) else {}
+        t = " ".join(str(s.get("title") or "").split())
+        b = str(s.get("brief") or "").strip()
+        if not t or len(t) > PLAN_TITLE_MAX:
+            return None, f"step {i}: title is required, one line, max {PLAN_TITLE_MAX} chars."
+        if not b or len(b) > MAX_BRIEF:
+            return None, f"step {i}: brief is required, max {MAX_BRIEF} chars (3 to 5 lines)."
+        steps.append({"title": t, "brief": b})
+    if repo and not REPO_RE.fullmatch(repo):
+        return None, "repo must be owner/name, one of the repos listed in the message context."
+    frame: Dict[str, Any] = {"type": "plan.propose", "title": title, "steps": steps}
+    if why:
+        frame["why"] = why[:500]
+    if repo:
+        frame["repo"] = repo
+    return frame, None
 
 
 OUTCOME_ERRORS = {
@@ -259,7 +309,7 @@ def with_context(context: Dict[str, Any], text: str) -> str:
         # Guest of a work thread: the hub refuses the owner's tools to it (not_in_charge); saying so saves a wasted call.
         head += (f"[You were called into this work thread by a mention: {in_charge.capitalize()} is the agent in charge. "
                  "Answer what you are asked here. Do not call turn_outcome, acquire_resource, release_resource, "
-                 "propose_thread, propose_issue or pushed_commits: they stay with the agent in charge.]\n")
+                 "propose_thread, propose_plan, propose_issue or pushed_commits: they stay with the agent in charge.]\n")
     if context.get("kind") == "topic":
         # Product rule: the Lounge is for looking and trying, a thread for anything that changes the project.
         # Shared resources are also refused by the hub outside a thread (acquire_resource -> not_thread).
@@ -267,7 +317,8 @@ def with_context(context: Dict[str, Any], text: str) -> str:
                  "Allowed here: read code, infra and logs; run tests; a throwaway spike in a dedicated git worktree; "
                  "invoke a Lambda or Bedrock by hand. Not here: commit, push, deploy, creating, modifying or deleting "
                  "a cloud resource, or using a shared resource. For those, or when a human wants to move to implementation, "
-                 "call the propose_thread tool (short title, one-sentence reason, 3 to 5 line brief); "
+                 "call the propose_thread tool (short title, one-sentence reason, 3 to 5 line brief), or propose_plan "
+                 "when the work is a sequence of steps to run one after the other; "
                  "briefling shows the card and a human opens the thread.]\n")
     if context.get("name_topic") is True:
         head += (f"[This new topic has no title yet: call topic_title once with a short title (max {TOPIC_HEADING_MAX} "
@@ -336,6 +387,47 @@ ISSUE_SCHEMA = {
             "body": {"type": "string", "description": f"Issue body in GitHub Markdown (max {NEW_ISSUE_BODY_MAX} chars), in the team's language."},
         },
         "required": ["repo", "title", "body"],
+    },
+}
+
+
+PLAN_SCHEMA = {
+    "name": "propose_plan",
+    "description": (
+        "briefling only, in a Lounge topic or a thread: propose a plan of 2 to 10 steps that run one after the other, "
+        "approved at once by a human. Call it instead of propose_thread when a human asks for a large piece of work "
+        "(\"grand chantier\", \"a plan\", several deliverables that depend on each other) and each step can be finished "
+        "and checked on its own. It only shows a card with every step; nothing starts until a trusted human clicks "
+        "Launch the plan. Then, in a space without a board, briefling opens step 1 as a thread; when you end a step's "
+        "thread with turn_outcome done, it opens the next one (a waiting outcome holds the plan until the human "
+        "unblocks it). In a space driven by a GitHub board (the message context lists the attached repos), repo is "
+        "required: each step becomes an issue in that repo, blocked by the previous step's issue, and the board runs "
+        "them in order. One open card per conversation; no parallel steps; to change a launched plan, a human stops "
+        "it and you propose a new one. Each brief is the step's first message (or its issue body): self-contained, "
+        "readable without this conversation; in a board space the repo may be public, so no secrets."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": f"Short title of the plan (max {PLAN_TITLE_MAX} chars), in the team's language."},
+            "why": {"type": "string", "description": "One sentence: why a plan in steps (shown on the card)."},
+            "steps": {
+                "type": "array", "minItems": 2, "maxItems": PLAN_STEPS_MAX,
+                "description": "The steps, in the order they run.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": f"Step title, one line (max {PLAN_TITLE_MAX} chars): the thread or issue title."},
+                        "brief": {"type": "string", "description": (
+                            f"3 to 5 short Markdown lines (max {MAX_BRIEF} chars): what this step delivers, how it is "
+                            "checked, what is left to the next steps.")},
+                    },
+                    "required": ["title", "brief"],
+                },
+            },
+            "repo": {"type": "string", "description": "Board-driven space only: owner/name, one of the attached repos (listed in the message context). Leave it out elsewhere."},
+        },
+        "required": ["title", "steps"],
     },
 }
 
