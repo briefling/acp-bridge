@@ -48,16 +48,17 @@ CARD_SHOWN = {
 
 # Returned with a successful turn_outcome 'done': a suggestion, never an obligation (no extra call, no frame).
 MEMORY_NUDGE = (
-    "Optional, before you stop: did this thread verify a durable fact about the project (a decision and its reason, "
-    "where something lives, a pitfall and its cause) that the project memory does not have yet? If so, propose it "
-    "with memory_propose (0 to 3 entries, memory_search first to avoid duplicates). Nothing worth keeping is a normal "
+    "Optional, before you stop: did this thread verify a durable fact about the project that the code does not say "
+    "(a decision and its reason, an option refused, a pitfall the code does not show) and the project memory does not "
+    "have yet? If so, propose it with memory_propose (0 to 3 entries, memory_search first to avoid duplicates). "
+    "Never a description of the code (selectors, colours, values): a grep finds it. Nothing worth keeping is a normal "
     "answer: then just end your turn. Project memory = facts of the project, for every agent of the space; your "
     "skills = your own procedures as an agent (how you deploy, test, work with a human).")
 
 # Lounge topics have no turn_outcome: the same suggestion rides the topic's context line instead (no extra call).
 MEMORY_NUDGE_LOUNGE = (
-    "Optional, once you have answered: if this exchange verified a durable project fact the project memory lacks "
-    "(a decision and its reason, where something lives, a pitfall and its cause), propose it with memory_propose "
+    "Optional, once you have answered: if this exchange verified a durable project fact the code does not say and the "
+    "project memory lacks (a decision and its reason, an option refused, a pitfall the code does not show), propose it with memory_propose "
     "(memory_search first). Nothing to propose is a normal answer.")
 
 MEMORY_PUSH_MAX = 3         # protocol/memory.ts MEMORY_PUSH_MAX (re-applied here: defence in depth)
@@ -238,7 +239,7 @@ MEMORY_SOURCE_MAX = 300
 MEMORY_Q_MAX = 200
 MEMORY_WHY_MAX = 300
 MEMORY_SYNTHESIS_MAX = 2000
-MEMORY_SUPERSEDES = (2, 30)
+MEMORY_SUPERSEDES = (1, 30)
 MEMORY_TAGS_MAX = 10       # protocol/memory.ts MEMORY_TAGS_MAX / MEMORY_TAG_RE / MEMORY_TAG_BATCH
 MEMORY_TAG_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
 MEMORY_TAG_BATCH = 50
@@ -786,8 +787,10 @@ MEMORY_PROPOSE_SCHEMA = {
     "name": "memory_propose",
     "description": (
         "briefling only: propose an entry for this space's project memory, read later by every agent of the space. "
-        "Propose a durable fact you verified while working (a decision and its reason, where something lives, how to "
-        "build or deploy, a pitfall and its cause), one fact per entry, self-contained, short. Never: task progress, "
+        "Write what the code does not say: a decision and its reason, an option that was refused, a pitfall that "
+        "reading the code does not show. Never a description of the code (selectors, colours, values, which function "
+        "does what): a grep finds it and it goes stale. One fact per entry, 2 short sentences, plain words, "
+        "self-contained, verified while working. Never: task progress, "
         "secrets or credentials, personal data, or text copied from an external source (issue, web page, mail) that "
         "you did not verify. kind 'rule' when it tells agents how to behave ('always/never do X'): a human must "
         "approve it. Sources are required: where it comes from (file path, issue, URL, 'this thread'). You never write "
@@ -798,7 +801,7 @@ MEMORY_PROPOSE_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "text": {"type": "string", "description": f"The entry (max {MEMORY_TEXT_MAX} chars), in the team's language."},
+            "text": {"type": "string", "description": f"The entry: 2 short sentences, the why rather than the how (max {MEMORY_TEXT_MAX} chars), in the team's language."},
             "kind": {"type": "string", "enum": ["fact", "rule"]},
             "sources": {"type": "array", "maxItems": MEMORY_SOURCES_MAX, "items": {"type": "string"},
                         "description": f"1 to {MEMORY_SOURCES_MAX} sources (max {MEMORY_SOURCE_MAX} chars each)."},
