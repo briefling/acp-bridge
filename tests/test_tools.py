@@ -222,6 +222,15 @@ def test_build_plan_shared_with_the_plugin():
     assert "leave repo out" in tools.refused("propose_plan", "not_board")["detail"]
 
 
+def test_memory_propose_takes_replaces_like_the_plugin():
+    base = {"text": "x", "kind": "fact", "sources": ["s"], "tags": ["hub"]}
+    ok, err = tools.BUILD["memory_propose"]({**base, "replaces": ["j1", "j2"]})
+    assert not err and ok["replaces"] == ["j1", "j2"]
+    assert "replaces" not in tools.BUILD["memory_propose"](base)[0]
+    for bad in ("j1", ["j1", "j1"], ["a b"], [f"x{i}" for i in range(6)]):
+        assert tools.BUILD["memory_propose"]({**base, "replaces": bad})[0] is None, bad
+
+
 def test_memory_propose_takes_tags_like_the_plugin():
     ok, err = tools.BUILD["memory_propose"]({"text": "x", "kind": "fact", "sources": ["s"], "tags": ["Déploiement", "hub", "HUB"]})
     assert not err and ok["tags"] == ["deploiement", "hub"]

@@ -154,7 +154,10 @@ def build_memory_propose(args: Dict[str, Any]) -> Built:
     tags, err = td.clean_tags(args.get("tags"), required=True)
     if err:
         return None, err
-    return {"type": "memory.propose", "text": text, "kind": kind, "sources": sources, "tags": tags}, None
+    replaces, err = td.clean_replaces(args.get("replaces"))
+    if err:
+        return None, err
+    return {"type": "memory.propose", "text": text, "kind": kind, "sources": sources, "tags": tags, **({"replaces": replaces} if replaces else {})}, None
 
 
 BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {

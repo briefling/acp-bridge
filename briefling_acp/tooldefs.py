@@ -240,6 +240,7 @@ MEMORY_Q_MAX = 200
 MEMORY_WHY_MAX = 300
 MEMORY_SYNTHESIS_MAX = 2000
 MEMORY_SUPERSEDES = (1, 30)
+MEMORY_REPLACES_MAX = 5    # protocol/memory.ts MEMORY_REPLACES_MAX
 MEMORY_TAGS_MAX = 10       # protocol/memory.ts MEMORY_TAGS_MAX / MEMORY_TAG_RE / MEMORY_TAG_BATCH
 MEMORY_TAG_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
 MEMORY_TAG_BATCH = 50
@@ -272,11 +273,22 @@ def clean_tags(raw: Any, required: bool) -> Tuple[Optional[List[str]], Optional[
     return out, None
 
 
+def clean_replaces(raw: Any) -> Tuple[Optional[List[str]], Optional[str]]:
+    # `replaces` of memory_propose as the hub checks it (published ids are checked there); (None, error) when malformed.
+    if raw is None:
+        return [], None
+    if (not isinstance(raw, list) or len(raw) > MEMORY_REPLACES_MAX or len(set(map(str, raw))) != len(raw)
+            or not all(isinstance(x, str) and ID_RE.match(x) for x in raw)):
+        return None, f"replaces: 0 to {MEMORY_REPLACES_MAX} distinct entry ids from memory_search."
+    return list(raw), None
+
+
 MEMORY_ERRORS = {
     "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
     "forbidden": ("Not allowed: either this conversation's space is closed, or you asked for another space that you do "
                   "not serve or that the human of this turn cannot see."),
-    "not_found": "No published entry with that id in that space (it may be pending, archived or in another space).",
+    "not_found": ("No published entry with that id in that space (it may be pending, archived or in another space); "
+                  "for memory_propose: an id in replaces is not a published entry."),
     "memory_full": "The space's memory is full: tell the humans it needs compacting; do not retry.",
     "queue_full": "Too many entries wait for a human review in this space: do not propose more until they are reviewed.",
     "bad_frame": (f"Invalid entry: text 1-{MEMORY_TEXT_MAX} chars, kind fact|rule, 1-{MEMORY_SOURCES_MAX} sources of "
@@ -796,7 +808,10 @@ MEMORY_PROPOSE_SCHEMA = {
         "approve it. Sources are required: where it comes from (file path, issue, URL, 'this thread'). You never write "
         "the memory directly: depending on the space's settings, the entry is published at once or waits for a human "
         "in the Memory view. Search first (memory_search) to avoid duplicates and to see the space's tags. Split: the project memory keeps the "
-        "facts of the project, for every agent of the space; your skills keep your own procedures as an agent."
+        "facts of the project, for every agent of the space; your skills keep your own procedures as an agent. "
+        "Going back on a published entry (a decision changed, an option now refused): put its id in replaces and write "
+        "in the text the old choice and why it was left (e.g. 'X, not Y any more: Y broke Z'); once approved, the old "
+        "entry is archived. Never propose an entry that contradicts a published one without replacing it."
     ),
     "parameters": {
         "type": "object",
@@ -812,6 +827,10 @@ MEMORY_PROPOSE_SCHEMA = {
                                      "known alias or plural to its tag); reuse the space_tags memory_search lists "
                                      "before inventing one; never the project's "
                                      "own name nor the space's (the memory is already per space).")},
+            "replaces": {"type": "array", "maxItems": MEMORY_REPLACES_MAX, "items": {"type": "string"},
+                         "description": (f"Optional, 0 to {MEMORY_REPLACES_MAX} ids of published entries (from memory_search) "
+                                         "this entry goes back on: approved, they are archived (restorable). Only when "
+                                         "the new entry really changes them, never for a mere addition.")},
         },
         "required": ["text", "kind", "sources", "tags"],
     },
