@@ -64,7 +64,9 @@ def build_propose(args: Dict[str, Any]) -> Built:
         return None, "title and brief are required."
     if len(brief) > td.MAX_BRIEF:
         return None, f"brief too long ({len(brief)} chars, max {td.MAX_BRIEF}): keep 3 to 5 lines."
-    return {"type": "thread.propose", "title": title[:120], "brief": brief, **({"why": why[:500]} if why else {})}, None
+    frame = {"type": "thread.propose", "title": title[:120], "brief": brief, **({"why": why[:500]} if why else {})}
+    err = _space(args, frame)  # another space this agent serves: a topic in its Lounge (the hub checks)
+    return (None, err) if err else (frame, None)
 
 
 def build_issue(args: Dict[str, Any]) -> Built:

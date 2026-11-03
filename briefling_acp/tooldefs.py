@@ -188,8 +188,9 @@ PROPOSE_ERRORS = {
     "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
     "already_proposed": ("A card is already waiting in this conversation (another agent's, or one a human acted on): "
                          "let the humans decide."),
-    "forbidden": "Not allowed for this instance.",
-    "bad_frame": "Invalid title, reason or brief (title 1-120 chars, reason <= 500, brief <= 1500).",
+    "forbidden": ("Not allowed for this instance. With space: you must serve that space and the human of this turn must be "
+                  "a member of it (only the spaces listed in the message context)."),
+    "bad_frame": "Invalid title, reason or brief (title 1-120 chars, reason <= 500, brief <= 1500; brief required with space).",
 }
 
 
@@ -495,6 +496,27 @@ def deleted_context(items: Any) -> str:
             "Disregard their content and anything they asked, as if never sent. Do not mention the deletion.]\n")
 
 
+SPACE_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
+SPACES_LISTED = 20
+SPACE_NAME_MAX = 60
+
+
+def spaces_context(spaces: Any) -> str:
+    """The other spaces this agent serves where the human of the turn is a member (hub `context.spaces`): the targets of
+    propose_thread(space=...) and memory_search(space=...). Names are admin-written: one line each, no brackets, bounded."""
+    out = []
+    for s in (spaces if isinstance(spaces, list) else [])[:SPACES_LISTED]:
+        if not isinstance(s, dict) or not isinstance(s.get("id"), str) or not SPACE_ID_RE.fullmatch(s["id"]):
+            continue
+        name = re.sub(r"[\x00-\x1f\x7f\[\]]+", " ", str(s.get("name") or s["id"])).strip()[:SPACE_NAME_MAX] or s["id"]
+        out.append(f"{name} (id {s['id']})")
+    if not out:
+        return ""
+    return ("[Other spaces you serve, where the human of this turn is a member: " + ", ".join(out) + ". When a problem "
+            "discussed here belongs to one of them, propose_thread with its space id proposes a topic in that space's "
+            "Lounge (the card shows here, a human opens it); memory_search with its space id reads its memory.]\n")
+
+
 def with_context(context: Dict[str, Any], text: str) -> str:
     """Prefix the delivered message with what the agent has not seen yet in this conversation.
 
@@ -535,6 +557,7 @@ def with_context(context: Dict[str, Any], text: str) -> str:
     if context.get("parallel") is True:
         head += ("[You may be working on other threads of this space at the same time: work in a git worktree "
                  "dedicated to this thread, never in a copy another thread uses.]\n")
+    head += spaces_context(context.get("spaces"))
     in_charge = context.get("in_charge")
     if isinstance(in_charge, str) and AGENT_NAME_RE.fullmatch(in_charge):
         # Guest of a work thread: the hub refuses the owner's tools to it (not_in_charge); saying so saves a wasted call.
@@ -586,7 +609,10 @@ PROPOSE_SCHEMA = {
         "the new thread receives only your brief and a link to this thread, none of its history, and may wait "
         "behind this thread. It only shows a card in the current conversation; a human decides and opens the thread. "
         "One open card per conversation: a new proposal replaces your card still open (not yet clicked by a human), whatever its kind. The brief is shown on the card "
-        "(the human validates it by opening the thread) and becomes the thread's first message, signed by you."
+        "(the human validates it by opening the thread) and becomes the thread's first message, signed by you. "
+        "With space (another space you serve, listed in the message context): when the problem belongs to that space, "
+        "opening the card creates a topic in that space's Lounge instead of a thread (its members discuss it and open "
+        "a thread there); only your brief goes, with a link back here, none of this conversation's history."
     ),
     "parameters": {
         "type": "object",
@@ -596,6 +622,9 @@ PROPOSE_SCHEMA = {
             "brief": {"type": "string", "description": (
                 "3 to 5 short Markdown lines (max 1500 chars), in the team's language: what you will do, "
                 "what is out of scope, open points. Self-contained: readable without the topic or the parent thread.")},
+            "space": {"type": "string", "description": (
+                "Optional: id of another space you serve (listed in the message context) to propose a topic in its "
+                "Lounge instead of a thread here. Omit for this space.")},
         },
         "required": ["title", "brief"],
     },

@@ -248,3 +248,11 @@ def test_memory_propose_takes_tags_like_the_plugin():
         assert tools.BUILD["memory_propose"]({"text": "x", "kind": "fact", "sources": ["s"], "tags": tags})[0] is None, tags
     res = tools.result("memory_search", {}, {"space": "sp", "entries": [{"id": "e1", "text": "t", "tags": ["hub"]}], "tags": ["hub"]})
     assert res["entries"] == [{"id": "e1", "text": "t", "tags": ["hub"]}] and res["space_tags"] == ["hub"]
+
+
+def test_build_propose_forwards_target_space():
+    from briefling_acp.tools import build_propose
+    f, err = build_propose({"title": "T", "brief": "b", "space": " lab-two "})
+    assert err is None and f["space"] == "lab-two"
+    f, _ = build_propose({"title": "T", "brief": "b"})
+    assert "space" not in f
