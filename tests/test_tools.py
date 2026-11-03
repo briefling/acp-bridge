@@ -209,9 +209,18 @@ def test_build_title_one_line_bounded():
 def test_turn_cards_tell_the_agent_they_show_after_its_text():
     """The client shows turn cards after the agent's text (client/src/order.ts): the result says so, else agents wrote
     « the card is above » (the old display). Same text as the plugin (shared tooldefs)."""
-    for tool in ("propose_thread", "propose_issue", "propose_plan", "propose_space_about"):
+    for tool in ("propose_thread", "propose_issue", "propose_plan", "propose_space_about", "ask_choices"):
         res = tools.result(tool, {}, {"msg_id": "c1"})
         assert res["ok"] is True and res["card"] == "c1" and "right after your text of this turn" in res["detail"], tool
+
+
+def test_ask_choices_shared_with_the_plugin():
+    q = {"label": "Who", "question": "Who deletes?", "choices": ["Author", "Leads"]}
+    assert "ask_choices" in tools.NAMES
+    assert tools.BUILD["ask_choices"]({"questions": [q]}) == (
+        {"type": "ask.choices", "text": "", "items": [{"label": "Who", "q": "Who deletes?", "options": ["Author", "Leads"]}]}, None)
+    assert tools.BUILD["ask_choices"]({"questions": [{**q, "choices": ["Author"]}]})[0] is None
+    assert "1 to 5 questions" in tools.refused("ask_choices", "bad_frame")["detail"]
 
 
 def test_build_plan_shared_with_the_plugin():
