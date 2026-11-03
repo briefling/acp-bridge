@@ -186,7 +186,8 @@ PROPOSE_ERRORS = {
     "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
     "not_topic": "This hub only accepts the card in a Lounge topic: do the work here in this thread.",
     "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
-    "already_proposed": "A card is already waiting in this conversation: let the humans decide.",
+    "already_proposed": ("A card is already waiting in this conversation (another agent's, or one a human acted on): "
+                         "let the humans decide."),
     "forbidden": "Not allowed for this instance.",
     "bad_frame": "Invalid title, reason or brief (title 1-120 chars, reason <= 500, brief <= 1500).",
 }
@@ -197,7 +198,8 @@ ISSUE_ERRORS = {
     "not_board": "This space is not driven by a GitHub board: no issue card here (a human can use → Issue on a thread).",
     "repo_not_attached": "That repo is not attached to this space: use one of the repos listed in the message context.",
     "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
-    "already_proposed": "A card is already waiting in this conversation: let the humans decide.",
+    "already_proposed": ("A card is already waiting in this conversation (another agent's, or one a human acted on): "
+                         "let the humans decide."),
     "forbidden": "Not allowed for this instance.",
     "bad_frame": f"Invalid repo, title or body (owner/name, title 1-{NEW_ISSUE_TITLE_MAX} chars on one line, body <= {NEW_ISSUE_BODY_MAX}).",
 }
@@ -209,7 +211,8 @@ PLAN_ERRORS = {
     "repo_not_attached": ("This space is driven by a GitHub board: repo is required, one of the repos listed in the "
                           "message context (the steps become issues there)."),
     "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
-    "already_proposed": "A card is already waiting in this conversation: let the humans decide.",
+    "already_proposed": ("A card is already waiting in this conversation (another agent's, or one a human acted on): "
+                         "let the humans decide."),
     "forbidden": "Not allowed for this instance.",
     "bad_frame": (f"Invalid plan: title 1-{PLAN_TITLE_MAX} chars on one line, reason <= 500, 2 to {PLAN_STEPS_MAX} "
                   f"steps, each with a one-line title (<= {PLAN_TITLE_MAX}) and a brief (<= {MAX_BRIEF})."),
@@ -582,7 +585,7 @@ PROPOSE_SCHEMA = {
         "(a human asks for it, or you spot it and the human agrees), never to hand off the work of this thread; "
         "the new thread receives only your brief and a link to this thread, none of its history, and may wait "
         "behind this thread. It only shows a card in the current conversation; a human decides and opens the thread. "
-        "One open card per conversation. The brief is shown on the card "
+        "One open card per conversation: a new proposal replaces your card still open (not yet clicked by a human), whatever its kind. The brief is shown on the card "
         "(the human validates it by opening the thread) and becomes the thread's first message, signed by you."
     ),
     "parameters": {
@@ -607,7 +610,8 @@ ISSUE_SCHEMA = {
         "turn the discussion into an issue (\"make it an issue\", \"open an issue\", \"ouvre une issue\"...). It only "
         "shows a card in the current conversation with the repo, title and body; nothing is written to GitHub until a "
         "trusted human clicks Create the issue. briefling then creates it with its GitHub App (no label), adds it to the "
-        "Project and opens the issue's thread, where the work happens. One open card per conversation. Write the body "
+        "Project and opens the issue's thread, where the work happens. One open card per conversation: a new proposal "
+        "replaces your card still open (not yet clicked by a human), whatever its kind. Write the body "
         "for whoever does the work, self-contained (readable without this conversation): context, what is expected, "
         "acceptance criteria, out of scope. The repo may be public: no secrets, credentials or private data."
     ),
@@ -634,7 +638,8 @@ PLAN_SCHEMA = {
         "thread with turn_outcome done, it opens the next one (a waiting outcome holds the plan until the human "
         "unblocks it). In a space driven by a GitHub board (the message context lists the attached repos), repo is "
         "required: each step becomes an issue in that repo, blocked by the previous step's issue, and the board runs "
-        "them in order. One open card per conversation; no parallel steps; to change a launched plan, a human stops "
+        "them in order. One open card per conversation: a new proposal replaces your card still open (not yet clicked "
+        "by a human), whatever its kind; no parallel steps; to change a launched plan, a human stops "
         "it and you propose a new one. Each brief is the step's first message (or its issue body): self-contained, "
         "readable without this conversation; in a board space the repo may be public, so no secrets."
     ),

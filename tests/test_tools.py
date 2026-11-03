@@ -101,7 +101,8 @@ async def test_hub_refusal_and_answers_are_shaped_like_the_plugin(env):
     text = finals(await hub.collect_turn("t1"))[-1]["text"]
     res, err = tool_result(text, "propose_thread")
     assert err and res == {"ok": False, "error": "already_proposed",
-                           "detail": "A card is already waiting in this conversation: let the humans decide."}
+                           "detail": "A card is already waiting in this conversation (another agent's, or one a human acted on): "
+                                     "let the humans decide."}
     res, _ = tool_result(text, "acquire_resource")
     assert res["granted"] is False and "#2 in the queue" in res["detail"] and "do NOT call turn_outcome" in res["detail"]
     res, _ = tool_result(text, "memory_search")
