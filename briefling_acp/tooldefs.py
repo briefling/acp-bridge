@@ -25,6 +25,7 @@ NO_TEXT = ("Nothing was posted in this thread during this turn: the human would 
 
 
 MAX_ABOUT = 4000  # protocol/frames.ts MAX_ABOUT (space description, admin-written)
+RESOURCE_RULE_MAX = 200  # protocol/frames.ts RESOURCE_RULE_MAX (usage rule of a shared resource, admin-written)
 TOPIC_HEADING_MAX = 60  # protocol/frames.ts TOPIC_HEADING_MAX (topic title; the hub cleans it again)
 NEW_ISSUE_TITLE_MAX = 256  # protocol/frames.ts NEW_ISSUE_TITLE_MAX (GitHub's limit)
 NEW_ISSUE_BODY_MAX = 20_000  # protocol/frames.ts NEW_ISSUE_BODY_MAX
@@ -532,7 +533,17 @@ def with_context(context: Dict[str, Any], text: str) -> str:
         # agent in charge needs all of it to propose changes (propose_space_about).
         head += f"[Space: {about.strip()[:MAX_ABOUT]}]\n"
     resources = [r for r in (context.get("resources") or []) if isinstance(r, str) and RESOURCE_RE.fullmatch(r)]
-    if resources:
+    rules = context.get("resource_rules") if isinstance(context.get("resource_rules"), dict) else {}
+    rules = {r: " ".join(v.split())[:RESOURCE_RULE_MAX] for r, v in rules.items() if r in resources and isinstance(v, str) and v.strip()}
+    if resources and rules:
+        # Typed resources: the admin's rule says at which step to take and release each one, the same for every agent
+        # of the space (nothing left to guess from the name). A resource saved before rules existed keeps the default.
+        lines = [f"- {r}: {rules[r]}" if r in rules else f"- {r}: no rule set, take it right before using it, release it after."
+                 for r in resources]
+        head += ("[Shared resources in this space: take each one with acquire_resource and release it with "
+                 "release_resource exactly at the steps its rule names (rules set by the space admin):\n"
+                 + "\n".join(lines) + "]\n")
+    elif resources:
         head += (f"[Shared resources in this space (take one with acquire_resource right before using it, "
                  f"release_resource after): {', '.join(resources)}.]\n")
     head += issue_context(context.get("issue"))
@@ -853,7 +864,8 @@ ACQUIRE_SCHEMA = {
         "briefling only, in a thread: take a shared resource of the space (deploying a stack, using the emulator, "
         "restarting the gateway...) so that no other thread uses it at the same time. Call it right BEFORE using the "
         "resource, never earlier (not at the start of the turn, not while you are still coding). The list of the "
-        "space's resources is given in the conversation context. If granted, use it, then call release_resource as "
+        "space's resources, with the rule of when to take and release each, is given in the conversation context; follow "
+        "that rule. If granted, use it, then call release_resource as "
         "soon as you are done (otherwise it is freed at the end of your turn). If not granted, do NOT use it: end "
         "your turn with a one-line message and without turn_outcome; the hub resumes this thread when it is yours."
     ),

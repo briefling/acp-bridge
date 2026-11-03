@@ -199,10 +199,12 @@ def test_prompt_text_frames_context_as_data():
 
 def test_prompt_text_gives_the_plugin_context():
     f = deliver("t1", "go", kind="topic")
-    f["context"].update({"space_about": "Project X", "resources": ["stack:dev"], "repos": ["acme/app"]})
+    f["context"].update({"space_about": "Project X", "resources": ["stack:dev"], "repos": ["acme/app"],
+                         "resource_rules": {"stack:dev": "Take before cdk deploy, release after."}})
     t = prompt_text(f)
     assert t.startswith('[briefling Lounge topic "Port Kiro", message from Ada]\n[Space: Project X]\n')
-    assert "acquire_resource" in t and "stack:dev" in t and "acme/app" in t and "propose_thread tool" in t
+    assert "acquire_resource" in t and "acme/app" in t and "propose_thread tool" in t
+    assert "- stack:dev: Take before cdk deploy, release after." in t, "the admin's rule reaches ACP agents too"
     assert t.endswith("\ngo")
 
 
