@@ -14,7 +14,7 @@ from . import tooldefs as td
 
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
-           td.TOPIC_TITLE_SCHEMA]
+           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA]
 NAMES = [s["name"] for s in SCHEMAS]
 
 Built = Tuple[Optional[Dict[str, Any]], Optional[str]]  # (frame without `thread`, None) or (None, message)
@@ -168,6 +168,7 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "propose_space_about": build_about, "acquire_resource": _resource("resource.acquire"),
     "release_resource": _resource("resource.release"), "pushed_commits": build_pushed, "memory_search": build_search,
     "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
+    "space_threads": td.build_space_threads, "thread_read": td.build_thread_read, "space_metrics": td.build_space_metrics,
 }
 assert set(BUILD) == set(NAMES)
 
@@ -177,6 +178,7 @@ ERRORS = {
     "propose_space_about": td.ABOUT_ERRORS, "acquire_resource": td.RESOURCE_ERRORS, "release_resource": td.RESOURCE_ERRORS,
     "pushed_commits": td.CI_ERRORS, "memory_search": td.MEMORY_ERRORS, "memory_read": td.MEMORY_ERRORS,
     "memory_propose": td.MEMORY_ERRORS, "topic_title": td.TITLE_ERRORS,
+    "space_threads": td.INTROSPECT_ERRORS, "thread_read": td.INTROSPECT_ERRORS, "space_metrics": td.INTROSPECT_ERRORS,
 }
 
 
@@ -186,7 +188,7 @@ def refused(tool: str, code: str) -> Dict[str, Any]:
 
 
 def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str, Any]:
-    """The tool result for the hub's answer (ack, resource.result, memory.result, memory.proposed): same as the plugin."""
+    """The tool result for the hub's answer (ack, resource.result, memory.result, introspect.result, memory.proposed): same as the plugin."""
     if tool == "turn_outcome":
         if frame["outcome"] == "waiting":
             return {"ok": True, "detail": "Shown in the thread: the human sees what you wait for."}
@@ -214,6 +216,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
                                       "follows it). Nothing else to do."}
     if tool in ("memory_search", "memory_read"):
         return td.memory_result(answer)
+    if tool in ("space_threads", "thread_read", "space_metrics"):
+        return td.introspect_result(answer)
     if tool == "memory_propose":
         return {"ok": True, "id": answer.get("id"), "status": answer.get("status"),
                 "detail": td.MEMORY_GATES.get(str(answer.get("gate") or ""), "Recorded.")}

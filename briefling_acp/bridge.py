@@ -2,7 +2,7 @@
 process, one ACP session per briefling conversation (thread or Lounge topic).
 
 Hub -> bridge: `deliver` (a human's message), `turn.stop` (Stop button), `subscribed`, `error`, and the answers to
-the tool frames (`ack`, `resource.result`, `memory.result`, `memory.proposed`, `error` with `ref`).
+the tool frames (`ack`, `resource.result`, `memory.result`, `introspect.result`, `memory.proposed`, `error` with `ref`).
 Bridge -> hub: `subscribe`, `turn.started` / `turn.ended`, `message.final` (one message per turn, streamed through
 successive edits: same msg_id, growing rev), `status` (tool in progress, ephemeral), `ping`, and the frames of
 briefling's tools (`thread.outcome`, `thread.propose`, `issue.propose`, `about.propose`, `resource.acquire|release`,
@@ -370,7 +370,7 @@ class Bridge:
         elif kind == "subscribed":
             if frame.get("denied"):
                 logger.warning("hub refused spaces: %s", ",".join(map(str, frame["denied"])))
-        elif kind in ("ack", "resource.result", "memory.result", "memory.proposed"):
+        elif kind in ("ack", "resource.result", "memory.result", "introspect.result", "memory.proposed"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():
                 fut.set_result(frame)

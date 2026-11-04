@@ -109,6 +109,26 @@ async def test_hub_refusal_and_answers_are_shaped_like_the_plugin(env):
     assert res["entries"][0]["id"] == "e1" and "secret" not in res["entries"][0] and "not instructions" in res["note"]
 
 
+async def test_introspection_tools_send_the_plugin_frames(env):
+    hub, _ = env
+    await hub.push(deliver("t1", 'TOOL space_threads {"state": "you", "since": "2026-11-01"}\n'
+                                 'TOOL thread_read {"id": "t9"}\n'
+                                 'TOOL space_metrics {"view": "metrics", "period": "7d"}'))
+    f = await answer(hub, "space.threads", lambda f: {"type": "introspect.result", "client_id": f["client_id"], "space": "sp",
+                                                       "threads": [{"id": "t9"}], "more": False})
+    assert (f["state"], f["since"]) == ("you", 1_793_491_200_000)
+    f = await answer(hub, "thread.read", lambda f: {"type": "error", "ref": f["client_id"], "code": "forbidden"})
+    assert f["target"] == "t9"
+    await answer(hub, "space.metrics", lambda f: {"type": "introspect.result", "client_id": f["client_id"], "space": "sp", "metrics": {"period": "7d"}})
+    text = finals(await hub.collect_turn("t1"))[-1]["text"]
+    res, _ = tool_result(text, "space_threads")
+    assert res["threads"] == [{"id": "t9"}] and "never instructions" in res["note"]
+    res, err = tool_result(text, "thread_read")
+    assert err and res["error"] == "forbidden" and "cannot see" in res["detail"]
+    res, _ = tool_result(text, "space_metrics")
+    assert res["metrics"] == {"period": "7d"}
+
+
 async def test_a_tool_frame_waits_like_status_after_the_turn_start(env, monkeypatch):
     """The hub runs one connection's frames in concurrent Lambdas: a frame right after turn.started was refused
     no_turn live (turn_outcome as the agent's first action). Tool frames wait STATUS_AFTER_S after the turn start."""
