@@ -276,3 +276,15 @@ def test_build_propose_forwards_target_space():
     assert err is None and f["space"] == "lab-two"
     f, _ = build_propose({"title": "T", "brief": "b"})
     assert "space" not in f
+
+
+def test_radar_signal_builds_like_the_plugin_and_reads_the_ack():
+    args = {"kind": "tech", "severity": "low", "title": "Better duplex model", "summary": "s", "sources": ["https://a.example/x"], "key": "k"}
+    frame, err = tools.BUILD["radar_signal"](args)
+    assert not err and frame["type"] == "radar.signal" and frame["kind"] == "tech"
+    assert tools.BUILD["radar_signal"]({**args, "sources": ["ftp://a"]})[0] is None
+    res = tools.result("radar_signal", frame, {"type": "ack", "msg_id": "s1"})
+    assert res["ok"] is True and res["signal"] == "s1"
+    assert "Radar pass" in tools.refused("radar_signal", "not_radar")["detail"]
+    assert "radar_signal" in tools.NAMES
+

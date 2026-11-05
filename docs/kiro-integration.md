@@ -67,7 +67,7 @@ Errors the agent may see: `forbidden` (unknown token: restart the conversation's
 or a server declared in the agent's own config with several turns at once), `bad_args`, or the hub's refusal code.
 
 Tools offered: `turn_outcome`, `propose_thread`, `propose_issue`, `propose_space_about`, `topic_title`,
-`acquire_resource`, `release_resource`, `pushed_commits`, `memory_search`, `memory_read`, `memory_propose`. Not
+`acquire_resource`, `release_resource`, `pushed_commits`, `memory_search`, `memory_read`, `memory_propose`, `radar_signal`. Not
 offered: the board/flow tools and `memory_review` / `memory_compact` (they live in the Hermes plugin).
 
 ## Debugging checklist
