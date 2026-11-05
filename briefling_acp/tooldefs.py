@@ -1298,6 +1298,7 @@ SIGNAL_SOURCES_MAX = 5
 SIGNAL_SOURCE_MAX = 500
 SIGNAL_KEY_MAX = 200
 SIGNAL_LINE_MAX = 300
+SIGNAL_TODO_MAX = 120  # protocol/radar.ts
 RADAR_SIGNALS_PER_PASS = 20
 
 RADAR_ERRORS = {
@@ -1311,7 +1312,8 @@ RADAR_ERRORS = {
     "bad_frame": (f"Invalid signal: kind in {', '.join(RADAR_TYPES)}; severity in {', '.join(RADAR_SEVERITIES)}; title 1-"
                   f"{SIGNAL_TITLE_MAX} chars on one line; summary 1-{SIGNAL_SUMMARY_MAX}; 1-{SIGNAL_SOURCES_MAX} https "
                   f"sources; key 1-{SIGNAL_KEY_MAX}; date YYYY-MM-DD (required for competitor and tech, not in the "
-                  f"future); gain and trial one line of 1-{SIGNAL_LINE_MAX} chars (required for tech)."),
+                  f"future); gain and trial one line of 1-{SIGNAL_LINE_MAX} chars (required for tech); todo one line of 1-"
+                  f"{SIGNAL_TODO_MAX} chars."),
 }
 
 RADAR_SIGNAL_SCHEMA = {
@@ -1345,6 +1347,7 @@ RADAR_SIGNAL_SCHEMA = {
             "date": {"type": "string", "description": "YYYY-MM-DD, the day the source published it. Required for competitor and tech."},
             "gain": {"type": "string", "description": f"Tech only, required: the expected gain, one line (max {SIGNAL_LINE_MAX} chars), numbers only as the source states them."},
             "trial": {"type": "string", "description": f"Tech only, required: the cost of a trial, one line (max {SIGNAL_LINE_MAX} chars): what to change, complexity, risk."},
+            "todo": {"type": "string", "description": f"The action to take, one short line (max {SIGNAL_TODO_MAX} chars), shown in the Radar list: e.g. 'Bump aiohttp to >= 3.14.4 in the STT lock'."},
         },
         "required": ["kind", "severity", "title", "summary", "sources", "key"],
     },
@@ -1391,6 +1394,11 @@ def build_radar_signal(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None, st
             return None, f"{name} is required for a tech signal (gain: the expected gain; trial: the cost of a trial)."
         if v:
             extra[name] = v
+    todo = str(args.get("todo") or "").strip()
+    if todo and (len(todo) > SIGNAL_TODO_MAX or any(ord(c) < 32 or ord(c) == 127 for c in todo)):
+        return None, f"todo: one line, max {SIGNAL_TODO_MAX} chars."
+    if todo:
+        extra["todo"] = todo
     return {"type": "radar.signal", "kind": kind, "severity": severity, "title": title, "summary": summary,
             "sources": sources, "key": key, **({"suspect": True} if suspect else {}), **({"date": date} if date else {}), **extra}, None
 
