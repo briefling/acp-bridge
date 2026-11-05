@@ -286,6 +286,8 @@ def test_radar_signal_builds_like_the_plugin_and_reads_the_ack():
     res = tools.result("radar_signal", frame, {"type": "ack", "msg_id": "s1"})
     assert res["ok"] is True and res["signal"] == "s1"
     assert "Radar pass" in tools.refused("radar_signal", "not_radar")["detail"]
+    assert "items the hub read" in tools.refused("radar_signal", "not_source")["detail"]
+    assert tools.BUILD["radar_signal"]({**args, "suspect": True})[0]["suspect"] is True
     assert "radar_signal" in tools.NAMES
 
 
