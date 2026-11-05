@@ -14,7 +14,7 @@ from . import tooldefs as td
 
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
-           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA]
+           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA]
 NAMES = [s["name"] for s in SCHEMAS]
 
 Built = Tuple[Optional[Dict[str, Any]], Optional[str]]  # (frame without `thread`, None) or (None, message)
@@ -170,6 +170,7 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
     "space_threads": td.build_space_threads, "thread_read": td.build_thread_read, "space_metrics": td.build_space_metrics,
     "radar_signal": td.build_radar_signal,
+    "radar_profile": td.build_radar_profile,
 }
 assert set(BUILD) == set(NAMES)
 
@@ -181,6 +182,7 @@ ERRORS = {
     "memory_propose": td.MEMORY_ERRORS, "topic_title": td.TITLE_ERRORS,
     "space_threads": td.INTROSPECT_ERRORS, "thread_read": td.INTROSPECT_ERRORS, "space_metrics": td.INTROSPECT_ERRORS,
     "radar_signal": td.RADAR_ERRORS,
+    "radar_profile": td.RADAR_PROFILE_ERRORS,
 }
 
 
@@ -220,6 +222,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return td.memory_result(answer)
     if tool in ("space_threads", "thread_read", "space_metrics"):
         return td.introspect_result(answer)
+    if tool == "radar_profile":
+        return {"ok": True, "detail": td.RADAR_PROFILE_SENT}
     if tool == "radar_signal":
         return {"ok": True, "signal": answer.get("msg_id"), "detail": td.RADAR_RECORDED}
     if tool == "memory_propose":

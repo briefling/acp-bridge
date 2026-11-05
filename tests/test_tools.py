@@ -288,3 +288,13 @@ def test_radar_signal_builds_like_the_plugin_and_reads_the_ack():
     assert "Radar pass" in tools.refused("radar_signal", "not_radar")["detail"]
     assert "radar_signal" in tools.NAMES
 
+
+def test_radar_profile_builds_like_the_plugin_and_reads_the_ack():
+    args = {"product": "Team hub.", "competitors": ["Linear: tickets"], "tech": [], "sources": ["https://github.com/x/y/issues"]}
+    frame, err = tools.BUILD["radar_profile"](args)
+    assert not err and frame["type"] == "radar.profile" and frame["tech"] == []
+    assert tools.BUILD["radar_profile"]({**args, "product": "a\nb\nc\nd"})[0] is None
+    assert "Settings › Radar" in tools.result("radar_profile", frame, {"type": "ack", "msg_id": ""})["detail"]
+    assert "profile pass" in tools.refused("radar_profile", "not_radar")["detail"]
+    assert "radar_profile" in tools.NAMES
+
