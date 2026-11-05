@@ -206,6 +206,8 @@ def test_prompt_text_gives_the_plugin_context():
     assert "acquire_resource" in t and "acme/app" in t and "propose_thread tool" in t
     assert "- stack:dev: Take before cdk deploy, release after." in t, "the admin's rule reaches ACP agents too"
     assert t.endswith("\ngo")
+    f["context"].update({"kind": "thread", "parallel": True})
+    assert "remove that worktree and its local branch" in prompt_text(f), "finished-thread cleanup reaches ACP agents"
 
 
 def test_run_exits_when_the_agent_cannot_start(tmp_path, caplog):

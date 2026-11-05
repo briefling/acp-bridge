@@ -41,6 +41,9 @@ _AFTER_TEXT = "shown in this conversation right after your text of this turn (be
 CARD_SHOWN = {
     "propose_thread": f"Card {_AFTER_TEXT}; a human decides whether to open the thread.",
     "propose_issue": f"Card {_AFTER_TEXT}; nothing is on GitHub until a trusted human clicks Create the issue.",
+    "request_elevation": (f"Card {_AFTER_TEXT}; nothing is granted until the owner approves it with a passkey outside "
+                          "briefling. End your turn now (in a thread: turn_outcome waiting, action 'approve the "
+                          "elevation, then Check')."),
     "propose_space_about": f"Draft {_AFTER_TEXT}; the admin reviews it, applies it to the space settings and saves.",
     "ask_choices": (f"Card {_AFTER_TEXT}. End your turn now (in a thread: turn_outcome waiting, action 'answer the "
                     "card'); do not repeat the questions in text. The human's choices come back as your next message, "
@@ -567,7 +570,9 @@ def with_context(context: Dict[str, Any], text: str) -> str:
                  f"branch of each pushed head; briefling lists them in the thread info{prs}.]\n")
     if context.get("parallel") is True:
         head += ("[You may be working on other threads of this space at the same time: work in a git worktree "
-                 "dedicated to this thread, never in a copy another thread uses.]\n")
+                 "dedicated to this thread, never in a copy another thread uses. Once the work is over, before you "
+                 "end this thread with turn_outcome done: if its branch is in origin/main and the worktree has nothing "
+                 "uncommitted, remove that worktree and its local branch in the same turn (leave it first).]\n")
     head += spaces_context(context.get("spaces"))
     in_charge = context.get("in_charge")
     if isinstance(in_charge, str) and AGENT_NAME_RE.fullmatch(in_charge):
@@ -664,6 +669,44 @@ ISSUE_SCHEMA = {
         },
         "required": ["repo", "title", "body"],
     },
+}
+
+
+ELEVATION_MINUTES_MIN, ELEVATION_MINUTES_MAX, ELEVATION_REASON_MAX = 5, 60, 300  # protocol/frames.ts
+
+ELEVATION_SCHEMA = {
+    "name": "request_elevation",
+    "description": (
+        "briefling only, in a Lounge topic or a thread: ask for temporary admin (permission set AgentElevated) on one "
+        "AWS account, for a few minutes, when the task needs a write your usual role does not allow on that account. "
+        "It shows a card; nothing is granted until the owner approves it with a passkey (Face ID) on an approval page "
+        "outside briefling, then checks the card. Write your reply first (what you will do with it), then call this "
+        "and end your turn (in a thread: turn_outcome waiting, action 'approve the elevation, then Check'): the grant "
+        "comes back as a message naming the account and the expiry. Then use the AgentElevated role of that account "
+        "through your SSO profile (it may take a minute to show up), and only for the stated reason. Ask for the "
+        "shortest duration that fits. Accounts with a permanent role of yours (e.g. a sandbox) need no elevation."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "account": {"type": "string", "description": "AWS account id, 12 digits."},
+            "minutes": {"type": "integer", "description": f"Duration, {ELEVATION_MINUTES_MIN} to {ELEVATION_MINUTES_MAX} minutes."},
+            "reason": {"type": "string", "description": f"What you will do with it, one line (max {ELEVATION_REASON_MAX} chars), in the team's language."},
+        },
+        "required": ["account", "minutes", "reason"],
+    },
+}
+
+ELEVATION_ERRORS = {
+    "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
+    "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
+    "elevation_off": "Temporary elevation is not set up on this briefling.",
+    "agent_not_allowed": "You are not on the list of agents that may be elevated.",
+    "account_not_allowed": "That account is not eligible for elevation (ask the human which accounts are).",
+    "elevation_failed": "The elevation service did not answer, try again later.",
+    "forbidden": "Not allowed for this instance.",
+    "bad_frame": (f"Invalid account, minutes or reason (12 digits, {ELEVATION_MINUTES_MIN}-{ELEVATION_MINUTES_MAX} "
+                  f"minutes, reason 1-{ELEVATION_REASON_MAX} chars on one line)."),
 }
 
 
@@ -928,7 +971,11 @@ PREVIEW_SHARE_SCHEMA = {
         "terminal (it hits the lead's own machine). Stop it with preview_stop. "
         "To share an ANDROID SCREEN instead (emulator or device reachable by `adb` in your terminal), pass `device` "
         "(its adb serial, as `adb devices` lists it) and no port: the lead sees the screen live and taps, swipes and "
-        "types on it."
+        "types on it. "
+        "To open a VOICE channel instead (the lead talks, you get transcripts as the lead's messages and your replies "
+        "are spoken), start the local voice daemon in the background (python -m briefling_voice.daemon --url-file "
+        "<path>) and pass `voice` = the daemon's url-file path; never paste the URL itself. It needs the daemon on "
+        "this machine's 127.0.0.1 (not from a Docker sandbox)."
     ),
     "parameters": {
         "type": "object",
@@ -938,8 +985,28 @@ PREVIEW_SHARE_SCHEMA = {
             "device": {"type": "string", "maxLength": 64,
                        "description": "adb serial of an Android device to share its screen, e.g. 'emulator-5554' or "
                                       "'host.docker.internal:5555'. Not with port."},
+            "voice": {"type": "string", "maxLength": 1024,
+                      "description": "Path, in your terminal, of the url-file the local voice daemon wrote (python -m "
+                                     "briefling_voice.daemon --url-file <path>). Not with port or device."},
             "label": {"type": "string", "maxLength": 80,
                       "description": "Optional short name shown on the line, e.g. 'Login page (Vite)'."},
+        },
+    },
+}
+
+
+VOICE_OPEN_SCHEMA = {
+    "name": "voice_open",
+    "description": (
+        "briefling only, in a thread: open the voice channel with the lead (they talk, you get transcripts as their "
+        "messages and your replies are spoken). Call it when the lead taps « Voice » (a message tells you so), or "
+        "when they ask you to talk. It starts this host's voice daemon if it is not running (up to 90 s the first "
+        "time), then posts the voice line; their app opens it by itself. Stop it with preview_stop(voice=true)."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "label": {"type": "string", "maxLength": 80, "description": "Optional short name shown on the line (default: your name)."},
         },
     },
 }
@@ -949,13 +1016,14 @@ PREVIEW_STOP_SCHEMA = {
     "name": "preview_stop",
     "description": (
         "briefling only, in a thread: stop a preview you shared with preview_share on this port (or this device for "
-        "a screen). Its line in the thread turns off and the open previews close."
+        "a screen, or voice=true for the voice channel). Its line in the thread turns off and the open previews close."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "port": {"type": "integer", "minimum": 1024, "maximum": 65535, "description": "Port given to preview_share."},
             "device": {"type": "string", "maxLength": 64, "description": "Device given to preview_share (a screen)."},
+            "voice": {"type": "boolean", "description": "true to stop the voice channel."},
         },
     },
 }
