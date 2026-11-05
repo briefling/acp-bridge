@@ -301,5 +301,9 @@ def test_radar_profile_builds_like_the_plugin_and_reads_the_ack():
     assert tools.BUILD["radar_profile"]({**args, "product": "a\nb\nc\nd"})[0] is None
     assert "Settings › Radar" in tools.result("radar_profile", frame, {"type": "ack", "msg_id": ""})["detail"]
     assert "profile pass" in tools.refused("radar_profile", "not_radar")["detail"]
+    fix, err = tools.BUILD["radar_profile"]({**args, "why": "Twice.", "from": ["a" * 22, "b" * 22]})
+    assert not err and (fix["why"], fix["from"], fix["ignore"]) == ("Twice.", ["a" * 22, "b" * 22], [])
+    assert "propose nothing" in tools.refused("radar_profile", "pending")["detail"]
+    assert "ignore" in next(s for s in tools.SCHEMAS if s["name"] == "radar_profile")["parameters"]["properties"]
     assert "radar_profile" in tools.NAMES
 
