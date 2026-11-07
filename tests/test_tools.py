@@ -270,6 +270,14 @@ def test_memory_propose_takes_tags_like_the_plugin():
     assert res["entries"] == [{"id": "e1", "text": "t", "tags": ["hub"]}] and res["space_tags"] == ["hub"]
 
 
+def test_build_propose_forwards_the_context_summary():
+    from briefling_acp.tools import build_propose
+    f, err = build_propose({"title": "T", "brief": "b", "context": " decided: 10 % "})
+    assert err is None and f["context"] == "decided: 10 %"
+    assert "context" not in build_propose({"title": "T", "brief": "b"})[0]
+    assert "context too long" in build_propose({"title": "T", "brief": "b", "context": "a" * 1501})[1]
+
+
 def test_build_propose_forwards_target_space():
     from briefling_acp.tools import build_propose
     f, err = build_propose({"title": "T", "brief": "b", "space": " lab-two "})

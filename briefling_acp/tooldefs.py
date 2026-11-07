@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 MAX_BRIEF = 1500  # protocol/frames.ts MAX_BRIEF
+MAX_CONTEXT = 1500  # protocol/frames.ts MAX_CONTEXT (summary of the conversation on a thread or plan card)
 MAX_ACTION = 200  # protocol/frames.ts MAX_ACTION
 SUMMARY_STATUS_MAX = 500  # protocol/frames.ts SUMMARY_* (thread summary sent with turn_outcome)
 SUMMARY_ITEMS_MAX = 8
@@ -224,6 +225,14 @@ PLAN_ERRORS = {
 }
 
 
+def clean_context(args: Dict[str, Any]) -> "tuple[str, str | None]":
+    """`context` of propose_thread / propose_plan: trimmed text ('' when absent), or an error for the agent."""
+    context = str(args.get("context") or "").strip()
+    if len(context) > MAX_CONTEXT:
+        return "", f"context too long ({len(context)} chars, max {MAX_CONTEXT}): keep the decisions, refusals, constraints and ids."
+    return context, None
+
+
 def build_plan(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None, str | None]":
     """propose_plan arguments -> plan.propose frame (without thread/client_id), or an error for the agent. Shared by
     the Hermes tool handler and the ACP bridge; the hub checks everything again."""
@@ -248,9 +257,14 @@ def build_plan(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None, str | None
         steps.append({"title": t, "brief": b})
     if repo and not REPO_RE.fullmatch(repo):
         return None, "repo must be owner/name, one of the repos listed in the message context."
+    context, err = clean_context(args)
+    if err:
+        return None, err
     frame: Dict[str, Any] = {"type": "plan.propose", "title": title, "steps": steps}
     if why:
         frame["why"] = why[:500]
+    if context:
+        frame["context"] = context
     if repo:
         frame["repo"] = repo
     return frame, None
@@ -524,8 +538,8 @@ def spaces_context(spaces: Any) -> str:
 def with_context(context: Dict[str, Any], text: str) -> str:
     """Prefix the delivered message with what the agent has not seen yet in this conversation.
 
-    In a Lounge topic the agent only receives messages that mention it, and a thread opened from a
-    topic starts with the whole topic: the hub sends those messages in `context.unseen`.
+    In a Lounge topic the agent only receives messages that mention it, and a thread opened from an
+    older card (no `context` summary) starts with the whole topic: the hub sends those messages in `context.unseen`.
     They are framed as data (quoted), never as instructions.
     """
     unseen = [u for u in (context.get("unseen") or []) if isinstance(u, dict) and isinstance(u.get("text"), str)]
@@ -587,7 +601,7 @@ def with_context(context: Dict[str, Any], text: str) -> str:
                  "Allowed here: read code, infra and logs; run tests; a throwaway spike in a dedicated git worktree; "
                  "invoke a Lambda or Bedrock by hand. Not here: commit, push, deploy, creating, modifying or deleting "
                  "a cloud resource, or using a shared resource. For those, or when a human wants to move to implementation, "
-                 "call the propose_thread tool (short title, one-sentence reason, 3 to 5 line brief), or propose_plan "
+                 "call the propose_thread tool (short title, one-sentence reason, 3 to 5 line brief, context summary), or propose_plan "
                  "when the work is a sequence of steps to run one after the other; "
                  "briefling shows the card and a human opens the thread. "
                  "Points the human must decide between options: the ask_choices card, not questions in text.]\n")
@@ -619,7 +633,8 @@ PROPOSE_SCHEMA = {
         "In a Lounge topic, call it when a human asks, in any language, to move to implementation or real work "
         "(\"go\", \"do it\", \"implement it\", \"vas-y\"...) "
         "or when the work needs a commit, a push, a deploy, a cloud resource change or a shared resource "
-        "(none of these happen in the Lounge); the new thread receives the whole topic as context. "
+        "(none of these happen in the Lounge). The new thread receives your brief, your context summary, a link to the "
+        "topic (thread_read) and the topic's 10 newest attachments, not the topic's messages: write the context. "
         "In a thread, call it only for a separate deliverable that should not ride along with the current work "
         "(a human asks for it, or you spot it and the human agrees), never to hand off the work of this thread; "
         "the new thread receives only your brief and a link to this thread, none of its history, and may wait "
@@ -638,6 +653,13 @@ PROPOSE_SCHEMA = {
             "brief": {"type": "string", "description": (
                 "3 to 5 short Markdown lines (max 1500 chars), in the team's language: what you will do, "
                 "what is out of scope, open points. Self-contained: readable without the topic or the parent thread.")},
+            "context": {"type": "string", "description": (
+                f"Summary of this conversation for the new thread (max {MAX_CONTEXT} chars), in the team's language, written by you now while you have it all in mind: "
+                "decisions taken, options refused and why, constraints, files and ids cited; what the brief does not say. "
+                "Shown folded under the brief (the human validates it by opening). With it, the kickoff sends brief + "
+                "this summary + a link back + the conversation's 10 newest attachments (each with its author and an excerpt "
+                "of its message), none of the conversation's messages; leave it out and the thread gets the whole topic. "
+                "Ignored with space (only the brief crosses to another space).")},
             "space": {"type": "string", "description": (
                 "Optional: id of another space you serve (listed in the message context) to propose a topic in its "
                 "Lounge instead of a thread here. Omit for this space.")},
@@ -731,6 +753,12 @@ PLAN_SCHEMA = {
         "properties": {
             "title": {"type": "string", "description": f"Short title of the plan (max {PLAN_TITLE_MAX} chars), in the team's language."},
             "why": {"type": "string", "description": "One sentence: why a plan in steps (shown on the card)."},
+            "context": {"type": "string", "description": (
+                f"Summary of this conversation for the steps (max {MAX_CONTEXT} chars), in the team's language, written by you now while you have it all in mind: "
+                "decisions taken, options refused and why, constraints, files and ids cited; what the briefs do not say. "
+                "Shown folded on the card (the human validates it by launching). With it, each step gets its brief + "
+                "this summary + a link back (step 1 also the conversation's 10 newest attachments, each with its author and "
+                "an excerpt of its message), none of the conversation's messages; a board-driven space ignores it (issues carry only their brief).")},
             "steps": {
                 "type": "array", "minItems": 2, "maxItems": PLAN_STEPS_MAX,
                 "description": "The steps, in the order they run.",
