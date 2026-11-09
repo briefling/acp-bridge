@@ -69,6 +69,18 @@ def test_build_outcome_carries_the_checked_summary():
     assert f is None and "decision" in err
 
 
+def test_build_outcome_carries_resume_on_waiting_only():
+    f, err = tools.build_outcome({"outcome": "waiting", "action": "restart", "resume": True})
+    assert not err and f["resume"] is True
+    f, _ = tools.build_outcome({"outcome": "waiting", "action": "restart"})
+    assert "resume" not in f
+    f, _ = tools.build_outcome({"outcome": "done", "resume": True})
+    assert "resume" not in f
+    f, err = tools.build_outcome({"outcome": "waiting", "action": "restart", "resume": "yes"})
+    assert f is None and "resume" in err
+    assert tools.SCHEMAS[0]["parameters"]["properties"]["resume"]["type"] == "boolean"
+
+
 async def test_waiting_needs_text_posted_first_and_flushes_it_before_the_frame(env):
     hub, _ = env
     await hub.push(deliver("t1", 'TOOL turn_outcome {"outcome": "waiting", "action": "approve PR #1"}'))

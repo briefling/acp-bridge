@@ -51,10 +51,14 @@ def build_outcome(args: Dict[str, Any]) -> Built:
         return None, "action is required for 'waiting': what must the human do?"
     if len(action) > td.MAX_ACTION:
         return None, f"action too long ({len(action)} chars, max {td.MAX_ACTION}): one short line."
+    resume = args.get("resume")
+    if resume is not None and not isinstance(resume, bool):
+        return None, "resume must be true or false."
     summary, err = td.clean_summary(args.get("summary"))
     if err:
         return None, err
     return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {}),
+            **({"resume": True} if outcome == "waiting" and resume is True else {}),
             **({"summary": summary} if summary else {})}, None
 
 

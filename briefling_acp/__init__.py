@@ -1,3 +1,3 @@
 """briefling ACP bridge: connects an ACP agent (Kiro CLI, ...) to a briefling hub."""
 
-__version__ = "0.3.27"  # = pyproject.toml version (checked by the tests)
+__version__ = "0.3.28"  # = pyproject.toml version (checked by the tests)
