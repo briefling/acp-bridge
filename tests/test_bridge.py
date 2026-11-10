@@ -206,6 +206,8 @@ def test_prompt_text_gives_the_plugin_context():
     assert "acquire_resource" in t and "acme/app" in t and "propose_thread tool" in t
     assert "- stack:dev: Take before cdk deploy, release after." in t, "the admin's rule reaches ACP agents too"
     assert t.endswith("\ngo")
+    f["context"]["spawned"] = [{"id": "t9", "title": "Hub", "state": "you", "outcome": {"kind": "done"}, "status": "Shipped."}]
+    assert "> Hub [t9]: a human's turn; last outcome done\n>   status: Shipped." in prompt_text(f), "threads opened from the topic reach ACP agents"
     f["context"].update({"kind": "thread", "parallel": True})
     assert "remove that worktree and its local branch" in prompt_text(f), "finished-thread cleanup reaches ACP agents"
     # the admin turned the space's « code » module off: no git instruction even with repos in the context
