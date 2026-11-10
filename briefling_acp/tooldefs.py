@@ -546,6 +546,11 @@ def has_code(context: Dict[str, Any], mounted: bool = False) -> bool:
         for k in ("repos", "ci", "pushed"))
 
 
+NONTECH_HINT = ("The author of this message is not technical (set by the space admin): answer in plain words, no jargon. "
+                "Tell results and effects (what changes for them, what they can do now, what you need from them), not "
+                "code, diffs, commands, file names or tool names. Give technical details only if they ask for them")
+
+
 def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> str:
     """Prefix the delivered message with what the agent has not seen yet in this conversation.
 
@@ -628,6 +633,10 @@ def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> s
                  "briefling shows the card and a human opens the thread. "
                  "Points the human must decide between options: the ask_choices card, not questions in text.]\n")
         head += f"[{MEMORY_NUDGE_LOUNGE}]\n"
+    if context.get("author_nontech") is True:
+        # A flag the space admin sets per member (never self-declared, never free text): only the wording changes, the
+        # agent keeps every capability. Technical details stay available when the member asks for them.
+        head += (f"[{NONTECH_HINT}]\n")
     head += ambient_context(context.get("ambient"))
     head += deleted_context(context.get("deleted"))
     if context.get("name_topic") is True:

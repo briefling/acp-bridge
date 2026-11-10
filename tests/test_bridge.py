@@ -214,6 +214,10 @@ def test_prompt_text_gives_the_plugin_context():
     assert "worktree" not in prompt_text(bare) and "pushed_commits" not in prompt_text(bare)
     bare["context"].update({"kind": "topic"})
     assert "look things up" in prompt_text(bare) and "git" not in prompt_text(bare)
+    # a member the admin flagged « not technical »: the plain-words hint reaches ACP agents too
+    assert "not technical" not in prompt_text(bare)
+    bare["context"].update({"author_nontech": True})
+    assert "The author of this message is not technical" in prompt_text(bare)
 
 
 def test_run_exits_when_the_agent_cannot_start(tmp_path, caplog):
