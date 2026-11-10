@@ -208,6 +208,12 @@ def test_prompt_text_gives_the_plugin_context():
     assert t.endswith("\ngo")
     f["context"].update({"kind": "thread", "parallel": True})
     assert "remove that worktree and its local branch" in prompt_text(f), "finished-thread cleanup reaches ACP agents"
+    # a space without a repo (the bridge has no mounted project): no git instruction at all, a plain Lounge
+    bare = deliver("t2", "go", kind="thread")
+    bare["context"].update({"parallel": True})
+    assert "worktree" not in prompt_text(bare) and "pushed_commits" not in prompt_text(bare)
+    bare["context"].update({"kind": "topic"})
+    assert "look things up" in prompt_text(bare) and "git" not in prompt_text(bare)
 
 
 def test_run_exits_when_the_agent_cannot_start(tmp_path, caplog):
