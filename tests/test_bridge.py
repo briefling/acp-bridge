@@ -208,6 +208,8 @@ def test_prompt_text_gives_the_plugin_context():
     assert t.endswith("\ngo")
     f["context"].update({"kind": "thread", "parallel": True})
     assert "remove that worktree and its local branch" in prompt_text(f), "finished-thread cleanup reaches ACP agents"
+    # the admin turned the space's « code » module off: no git instruction even with repos in the context
+    assert "worktree" not in prompt_text({**f, "context": {**f["context"], "code": False}})
     # a space without a repo (the bridge has no mounted project): no git instruction at all, a plain Lounge
     bare = deliver("t2", "go", kind="thread")
     bare["context"].update({"parallel": True})

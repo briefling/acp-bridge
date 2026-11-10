@@ -540,7 +540,10 @@ def spaces_context(spaces: Any) -> str:
 def has_code(context: Dict[str, Any], mounted: bool = False) -> bool:
     """The space holds code: a repo is attached (hub `context.code`, `repos`, `ci` or a non-empty `pushed`) or this
     agent mounts the space's project folder. Without either, no commit/push/worktree instruction: the space may be
-    about anything (family, a company's admin) and that jargon only confuses the agent and the people it talks to."""
+    about anything (family, a company's admin) and that jargon only confuses the agent and the people it talks to.
+    `code` False: the space admin turned its « code » module off, which wins over a mounted project."""
+    if context.get("code") is False:
+        return False
     return mounted or context.get("code") is True or any(
         isinstance(context.get(k), list) and any(isinstance(x, str) and REPO_RE.fullmatch(x) for x in context[k])
         for k in ("repos", "ci", "pushed"))
