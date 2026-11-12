@@ -327,3 +327,13 @@ def test_radar_profile_builds_like_the_plugin_and_reads_the_ack():
     assert "ignore" in next(s for s in tools.SCHEMAS if s["name"] == "radar_profile")["parameters"]["properties"]
     assert "radar_profile" in tools.NAMES
 
+
+
+def test_build_title_and_outcome_carry_the_tags():
+    assert tools.build_title({"title": "Firmware", "tags": ["ui"]}) == ({"type": "topic.title", "title": "Firmware", "tags": ["ui"]}, None)
+    f, err = tools.build_outcome({"outcome": "done", "tags": ["ui", "css"]})
+    assert not err and f["tags"] == ["ui", "css"]
+    assert "tags" not in tools.build_outcome({"outcome": "done", "tags": []})[0]
+    assert "tags must be" in tools.build_outcome({"outcome": "done", "tags": ["a", "b", "c"]})[1]
+    assert "tags must be" in tools.build_title({"title": "x", "tags": "ui"})[1]
+    assert "memory tags" in tools.refused("turn_outcome", "unknown_tag")["detail"]

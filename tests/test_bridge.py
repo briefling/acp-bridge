@@ -222,6 +222,9 @@ def test_prompt_text_gives_the_plugin_context():
     assert "not technical" not in prompt_text(bare)
     bare["context"].update({"author_nontech": True})
     assert "The author of this message is not technical" in prompt_text(bare)
+    # a conversation without tags yet: the space's memory tags to pick from reach ACP agents too
+    bare["context"].update({"kind": "thread", "tag_vocab": ["ui", "css"]})
+    assert "when you call turn_outcome, pass in `tags`" in prompt_text(bare) and ": ui, css.]" in prompt_text(bare)
 
 
 def test_run_exits_when_the_agent_cannot_start(tmp_path, caplog):

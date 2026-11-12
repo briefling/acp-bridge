@@ -57,9 +57,12 @@ def build_outcome(args: Dict[str, Any]) -> Built:
     summary, err = td.clean_summary(args.get("summary"))
     if err:
         return None, err
+    tags, err = td.clean_thread_tags(args.get("tags"))
+    if err:
+        return None, err
     return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {}),
             **({"resume": True} if outcome == "waiting" and resume is True else {}),
-            **({"summary": summary} if summary else {})}, None
+            **({"summary": summary} if summary else {}), **({"tags": tags} if tags else {})}, None
 
 
 def build_propose(args: Dict[str, Any]) -> Built:
@@ -103,7 +106,10 @@ def build_title(args: Dict[str, Any]) -> Built:
         return None, "title is required: one short line."
     if len(title) > td.TOPIC_HEADING_MAX:
         return None, f"title too long ({len(title)} chars, max {td.TOPIC_HEADING_MAX}): shorten it."
-    return {"type": "topic.title", "title": title}, None
+    tags, err = td.clean_thread_tags(args.get("tags"))
+    if err:
+        return None, err
+    return {"type": "topic.title", "title": title, **({"tags": tags} if tags else {})}, None
 
 
 def _resource(kind: str) -> Callable[[Dict[str, Any]], Built]:
