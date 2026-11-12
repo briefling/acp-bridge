@@ -21,6 +21,7 @@ SUMMARY_WHO_MAX = 60
 SUMMARY_WAITING_MAX = 120
 THREAD_TAGS_MAX = 2  # protocol/tags.ts THREAD_TAGS_MAX (tags of a topic or thread)
 TAG_VOCAB_MAX = 60  # protocol/tags.ts TAG_VOCAB_MAX
+UNTAGGED_OFFERED_MAX = 40  # protocol/tags.ts UNTAGGED_OFFERED_MAX (conversations a compaction offers to tag)
 
 
 NO_TEXT = ("Nothing was posted in this thread during this turn: the human would see only the banner. Write your "
@@ -278,8 +279,8 @@ def build_plan(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None, str | None
     return frame, None
 
 
-UNKNOWN_TAG = ("A tag is not one of this space's memory tags: nothing was recorded. Call it again with tags taken only "
-               "from the list in the message context, or without tags if none fits.")
+UNKNOWN_TAG = ("A tag is not one of this space's tags (its list is closed): nothing was recorded. Call it again with tags "
+               "taken only from the list in the message context, or without tags if none fits.")
 
 
 OUTCOME_ERRORS = {
@@ -904,12 +905,18 @@ def clean_thread_tags(raw: Any):
 
 
 def tags_context(context: Dict[str, Any]) -> str:
-    """`context.tag_vocab`: the conversation has no tags yet; the space's memory tags (slugs only) to pick 1-2 from."""
+    """`context.tag_vocab`: the conversation has no tags yet; the space's tags (slugs only) to pick 1-2 from.
+    `context.tag_open`: the space has fewer than 10 tags, so a new one may be created (protocol/tags.ts TAG_OPEN_MAX)."""
     raw = context.get("tag_vocab")
     vocab = [t for t in (raw if isinstance(raw, list) else [])[:TAG_VOCAB_MAX] if isinstance(t, str) and MEMORY_TAG_RE.fullmatch(t)]
+    tool = "topic_title" if context.get("kind") == "topic" else "turn_outcome"
+    if context.get("tag_open") is True:
+        known = f"one of this space's tags when one fits ({', '.join(vocab)}), else " if vocab else ""
+        return (f"[This conversation has no tags yet: when you call {tool}, pass in `tags` 1 or 2 tags saying what it is "
+                f"about: {known}a new short English tag (lower-case slug, e.g. solar, real-estate; never the space's name). "
+                "The space has few tags yet: a new one joins its list.]\n")
     if not vocab:
         return ""
-    tool = "topic_title" if context.get("kind") == "topic" else "turn_outcome"
     return (f"[This conversation has no tags yet: when you call {tool}, pass in `tags` 1 or 2 tags saying what it is "
             f"about, taken only from this space's memory tags (none fits: no tags): {', '.join(vocab)}.]\n")
 

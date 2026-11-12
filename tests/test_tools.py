@@ -336,4 +336,4 @@ def test_build_title_and_outcome_carry_the_tags():
     assert "tags" not in tools.build_outcome({"outcome": "done", "tags": []})[0]
     assert "tags must be" in tools.build_outcome({"outcome": "done", "tags": ["a", "b", "c"]})[1]
     assert "tags must be" in tools.build_title({"title": "x", "tags": "ui"})[1]
-    assert "memory tags" in tools.refused("turn_outcome", "unknown_tag")["detail"]
+    assert "list is closed" in tools.refused("turn_outcome", "unknown_tag")["detail"]
