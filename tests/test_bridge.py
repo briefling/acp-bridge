@@ -211,6 +211,8 @@ def test_prompt_text_gives_the_plugin_context():
     assert "propose_thread tool" not in off and "this space has no threads" in off
     f["context"]["spawned"] = [{"id": "t9", "title": "Hub", "state": "you", "outcome": {"kind": "done"}, "status": "Shipped."}]
     assert "> Hub [t9]: a human's turn; last outcome done\n>   status: Shipped." in prompt_text(f), "threads opened from the topic reach ACP agents"
+    f["context"]["leads"] = [{"from": "t8", "from_title": "Rovers", "what": "Calibrate the lidar"}]
+    assert "> Calibrate the lidar (from the closed thread \"Rovers\", id t8)" in prompt_text(f), "pending leads reach ACP agents"
     f["context"].update({"kind": "thread", "parallel": True})
     assert "remove that worktree and its local branch" in prompt_text(f), "finished-thread cleanup reaches ACP agents"
     # the admin turned the space's « code » module off: no git instruction even with repos in the context
