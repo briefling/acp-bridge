@@ -206,6 +206,9 @@ def test_prompt_text_gives_the_plugin_context():
     assert "acquire_resource" in t and "acme/app" in t and "propose_thread tool" in t
     assert "- stack:dev: Take before cdk deploy, release after." in t, "the admin's rule reaches ACP agents too"
     assert t.endswith("\ngo")
+    # the space's « threads » module off: no thread card to propose, the ACP agent is told so too
+    off = prompt_text({**f, "context": {**f["context"], "threads": False}})
+    assert "propose_thread tool" not in off and "this space has no threads" in off
     f["context"]["spawned"] = [{"id": "t9", "title": "Hub", "state": "you", "outcome": {"kind": "done"}, "status": "Shipped."}]
     assert "> Hub [t9]: a human's turn; last outcome done\n>   status: Shipped." in prompt_text(f), "threads opened from the topic reach ACP agents"
     f["context"].update({"kind": "thread", "parallel": True})

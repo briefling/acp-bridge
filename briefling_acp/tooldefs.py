@@ -567,6 +567,9 @@ def deleted_context(items: Any) -> str:
 
 
 SPACE_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
+# « threads » module off (hub `context.threads: false`): no thread can be opened in this space, so no card to propose.
+NO_THREADS_HINT = ("say so: this space has no threads (its admin turned them off), so that work is not done from here; "
+                   "do not call propose_thread or propose_plan for this space. ")
 SPACES_LISTED = 20
 SPACE_NAME_MAX = 60
 
@@ -681,10 +684,11 @@ def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> s
                     "Allowed here: look things up, read the space's files and data, try something without keeping it. "
                     "Not here: changing something for good (a file, a script, a scheduled job, a cloud resource) or "
                     "using a shared resource. For those, or when a human wants to move to real work, ")
-                 + "call the propose_thread tool (short title, one-sentence reason, 3 to 5 line brief, context summary), or propose_plan "
-                 "when the work is a sequence of steps to run one after the other; "
-                 "briefling shows the card and a human opens the thread. "
-                 "Points the human must decide between options: the ask_choices card, not questions in text.]\n")
+                 + (NO_THREADS_HINT if context.get("threads") is False else
+                    "call the propose_thread tool (short title, one-sentence reason, 3 to 5 line brief, context summary), or propose_plan "
+                    "when the work is a sequence of steps to run one after the other; "
+                    "briefling shows the card and a human opens the thread. ")
+                 + "Points the human must decide between options: the ask_choices card, not questions in text.]\n")
         head += f"[{MEMORY_NUDGE_LOUNGE}]\n"
     if context.get("author_nontech") is True:
         # A flag the space admin sets per member (never self-declared, never free text): only the wording changes, the
