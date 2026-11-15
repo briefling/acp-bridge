@@ -535,10 +535,14 @@ class Bridge:
         early = STATUS_AFTER_S - (time.monotonic() - turn.started)
         if early > 0:  # like status: a frame right after turn.started can be handled first and refused no_turn (seen live)
             await asyncio.sleep(early)
-        if tool == "turn_outcome" and frame["outcome"] == "waiting":
-            if not turn.reply():
+        if tool == "turn_outcome":
+            text = str(args.get("text") or "").strip()  # the answer written in the same step: posted with the turn's message
+            if text:
+                turn.text += ("\n\n" if turn.text.strip() else "") + text + "\n\n"  # later text: its own paragraph
+            if frame["outcome"] == "waiting" and not turn.reply():
                 return {"ok": False, "error": "no_text", "detail": NO_TEXT}
-            await turn.flush(force=True)  # the human sees the answer before the banner
+            if text or frame["outcome"] == "waiting":
+                await turn.flush(force=True)  # the human sees the answer before the banner
         logger.info("tool %s in %s", tool, thread)
         try:
             answer = await self.request({**frame, "thread": thread})

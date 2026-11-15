@@ -60,6 +60,8 @@ def build_outcome(args: Dict[str, Any]) -> Built:
     tags, err = td.clean_thread_tags(args.get("tags"))
     if err:
         return None, err
+    if len(_s(args, "text")) > td.MAX_TEXT:  # the bridge posts it in the turn's message (bridge.py), never in the frame
+        return None, f"text too long ({len(_s(args, 'text'))} chars, max {td.MAX_TEXT}): post the rest as a message first."
     return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {}),
             **({"resume": True} if outcome == "waiting" and resume is True else {}),
             **({"summary": summary} if summary else {}), **({"tags": tags} if tags else {})}, None
@@ -123,19 +125,8 @@ def _resource(kind: str) -> Callable[[Dict[str, Any]], Built]:
 
 
 def build_pushed(args: Dict[str, Any]) -> Built:
-    raw = args.get("commits")
-    if not isinstance(raw, list) or not 1 <= len(raw) <= td.CI_MAX_COMMITS:
-        return None, f"commits is required: 1 to {td.CI_MAX_COMMITS} items {{repo, sha}}."
-    commits = []
-    for c in raw:
-        c = c if isinstance(c, dict) else {}
-        repo, sha, branch = _s(c, "repo"), _s(c, "sha").lower(), _s(c, "branch")
-        if not td.REPO_RE.fullmatch(repo) or not td.SHA_RE.fullmatch(sha):
-            return None, "each commit needs repo (owner/name) and the full 40-character sha (git rev-parse HEAD)."
-        if branch and not td.BRANCH_RE.fullmatch(branch):
-            return None, "branch must be a plain git branch name (letters, digits, . _ / -), as git branch --show-current prints it."
-        commits.append({"repo": repo, "sha": sha, **({"branch": branch} if branch else {})})
-    return {"type": "ci.watch", "commits": commits}, None
+    commits, err = td.clean_commits(args)
+    return (None, err) if err else ({"type": "ci.watch", "commits": commits}, None)
 
 
 def build_search(args: Dict[str, Any]) -> Built:
@@ -157,16 +148,14 @@ def build_read(args: Dict[str, Any]) -> Built:
 
 
 def build_memory_propose(args: Dict[str, Any]) -> Built:
-    text, kind, raw = _s(args, "text"), _s(args, "kind"), args.get("sources")
+    text, kind = _s(args, "text"), _s(args, "kind")
     if not text or len(text) > td.MEMORY_TEXT_MAX:
         return None, f"text is required, max {td.MEMORY_TEXT_MAX} chars: one short fact."
     if kind not in ("fact", "rule"):
         return None, "kind must be 'fact' or 'rule'."
-    if not isinstance(raw, list) or not 1 <= len(raw) <= td.MEMORY_SOURCES_MAX:
-        return None, f"sources is required: 1 to {td.MEMORY_SOURCES_MAX} items (file path, issue, URL, 'this thread')."
-    sources = [" ".join(str(x or "").split()) for x in raw]
-    if any(not x or len(x) > td.MEMORY_SOURCE_MAX for x in sources):
-        return None, f"each source: 1 to {td.MEMORY_SOURCE_MAX} chars."
+    sources, err = td.clean_sources(args.get("sources"))
+    if err:
+        return None, err
     tags, err = td.clean_tags(args.get("tags"), required=True)
     if err:
         return None, err

@@ -344,3 +344,28 @@ def test_build_title_and_outcome_carry_the_tags():
     assert "tags must be" in tools.build_outcome({"outcome": "done", "tags": ["a", "b", "c"]})[1]
     assert "tags must be" in tools.build_title({"title": "x", "tags": "ui"})[1]
     assert "list is closed" in tools.refused("turn_outcome", "unknown_tag")["detail"]
+
+
+async def test_waiting_with_text_posts_it_before_the_frame(env):
+    # The answer written in the same step as turn_outcome rides the call: posted first, then the banner.
+    hub, _ = env
+    await hub.push(deliver("t1", 'TOOL turn_outcome {"outcome": "waiting", "action": "approve PR #1", "text": "Here is the plan."}'))
+    seen = []
+    f = await hub.next(lambda f: seen.append(f) or f["type"] == "thread.outcome")
+    assert any(x["type"] == "message.final" and x["text"].startswith("Here is the plan.") for x in seen), seen
+    await hub.push({"type": "ack", "client_id": f["client_id"]})
+    res, _ = tool_result(finals(await hub.collect_turn("t1"))[-1]["text"], "turn_outcome")
+    assert res["ok"] is True
+    assert "text" not in tools.build_outcome({"outcome": "done", "text": "x"})[0]  # never sent to the hub as a field
+    assert tools.build_outcome({"outcome": "done", "text": "x" * 32_001})[1]
+
+
+def test_tolerant_shapes_like_the_plugin():
+    sha = "ab" * 20
+    frame, err = tools.build_pushed({"repo": "https://github.com/acme/app", "commit": sha, "branch": "main"})
+    assert not err and frame["commits"] == [{"repo": "acme/app", "sha": sha, "branch": "main"}]
+    assert "repo" in tools.build_pushed({"commits": [{"sha": sha}]})[1]
+    frame, err = tools.build_memory_propose({"text": "t", "kind": "fact", "tags": ["deploy"]})
+    assert not err and frame["sources"] == ["this thread"]
+    frame, err = tools.build_outcome({"outcome": "done", "summary": "All shipped."})
+    assert not err and frame["summary"]["status"] == "All shipped."
