@@ -755,7 +755,10 @@ PROPOSE_SCHEMA = {
         "(the human validates it by opening the thread) and becomes the thread's first message, signed by you. "
         "With space (another space you serve, listed in the message context): when the problem belongs to that space, "
         "opening the card creates a topic in that space's Lounge instead of a thread (its members discuss it and open "
-        "a thread there); only your brief goes, with a link back here, none of this conversation's history."
+        "a thread there); only your brief goes, with a link back here, none of this conversation's history. "
+        "With as_topic: true: the card reads \"Make it a topic?\" and opening it creates a new topic in this space's Lounge "
+        "(no thread, no hierarchy), with your brief and a link back here, none of this conversation's history; use it when a "
+        "human asks to discuss a side subject in its own topic."
     ),
     "parameters": {
         "type": "object",
@@ -775,6 +778,9 @@ PROPOSE_SCHEMA = {
             "space": {"type": "string", "description": (
                 "Optional: id of another space you serve (listed in the message context) to propose a topic in its "
                 "Lounge instead of a thread here. Omit for this space.")},
+            "as_topic": {"type": "boolean", "description": (
+                "Optional: true to propose a new topic of this space's Lounge instead of a thread (brief + link back, "
+                "no history; context ignored).")},
         },
         "required": ["title", "brief"],
     },

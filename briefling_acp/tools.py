@@ -75,7 +75,7 @@ def build_propose(args: Dict[str, Any]) -> Built:
     if err:
         return None, err
     frame = {"type": "thread.propose", "title": title[:120], "brief": brief, **({"why": why[:500]} if why else {}),
-             **({"context": context} if context else {})}
+             **({"context": context} if context else {}), **({"topic": True} if args.get("as_topic") is True else {})}
     err = _space(args, frame)  # another space this agent serves: a topic in its Lounge (the hub checks)
     return (None, err) if err else (frame, None)
 

@@ -290,6 +290,13 @@ def test_build_propose_forwards_the_context_summary():
     assert "context too long" in build_propose({"title": "T", "brief": "b", "context": "a" * 1501})[1]
 
 
+def test_build_propose_as_topic_sends_topic_flag():
+    from briefling_acp.tools import build_propose
+    f, err = build_propose({"title": "T", "brief": "b", "as_topic": True})
+    assert err is None and f["topic"] is True and "space" not in f
+    assert "topic" not in build_propose({"title": "T", "brief": "b", "as_topic": "yes"})[0]
+
+
 def test_build_propose_forwards_target_space():
     from briefling_acp.tools import build_propose
     f, err = build_propose({"title": "T", "brief": "b", "space": " lab-two "})
