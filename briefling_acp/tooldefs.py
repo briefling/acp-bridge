@@ -404,6 +404,8 @@ def clean_replaces(raw: Any) -> Tuple[Optional[List[str]], Optional[str]]:
 
 
 MEMORY_ERRORS = {
+    "unknown_tag": ("This space's tag list is full (an admin caps it): a new tag is refused and nothing was recorded. Call it "
+                    "again with tags taken only from the space's tags (space_tags of memory_search, or the message context)."),
     "no_turn": "Only during a turn triggered by a trusted human in this conversation.",
     "forbidden": ("Not allowed: either this conversation's space is closed, or you asked for another space that you do "
                   "not serve or that the human of this turn cannot see."),
@@ -937,7 +939,7 @@ def clean_thread_tags(raw: Any):
 
 def tags_context(context: Dict[str, Any]) -> str:
     """`context.tag_vocab`: the conversation has no tags yet; the space's tags (slugs only) to pick 1-2 from.
-    `context.tag_open`: the space has fewer than 10 tags, so a new one may be created (protocol/tags.ts TAG_OPEN_MAX)."""
+    `context.tag_open`: the space's tag list is under its cap, so a new one may be created (protocol/tags.ts tagMaxOf)."""
     raw = context.get("tag_vocab")
     vocab = [t for t in (raw if isinstance(raw, list) else [])[:TAG_VOCAB_MAX] if isinstance(t, str) and MEMORY_TAG_RE.fullmatch(t)]
     tool = "topic_title" if context.get("kind") == "topic" else "turn_outcome"
