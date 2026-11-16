@@ -215,6 +215,8 @@ def test_prompt_text_gives_the_plugin_context():
     assert "> Calibrate the lidar (from the closed thread \"Rovers\", id t8)" in prompt_text(f), "pending leads reach ACP agents"
     f["context"].update({"kind": "thread", "parallel": True})
     assert "remove that worktree and its local branch" in prompt_text(f), "finished-thread cleanup reaches ACP agents"
+    assert "waits in your queue, place 1" in prompt_text({**f, "context": {**f["context"], "queued": {"position": 1}}}), "talk while queued reaches ACP agents"
+    assert "Your place in the queue has come" in prompt_text({**f, "context": {**f["context"], "relaunched": True}})
     # the admin turned the space's « code » module off: no git instruction even with repos in the context
     assert "worktree" not in prompt_text({**f, "context": {**f["context"], "code": False}})
     # a space without a repo (the bridge has no mounted project): no git instruction at all, a plain Lounge

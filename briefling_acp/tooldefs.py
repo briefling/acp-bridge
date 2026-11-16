@@ -283,6 +283,9 @@ UNKNOWN_TAG = ("A tag is not one of this space's tags (its list is closed): noth
                "taken only from the list in the message context, or without tags if none fits.")
 
 
+QUEUED_REFUSAL = ("This thread is waiting in your queue (a talk turn, Lounge rights): end your turn with a plain reply, "
+                  "without turn_outcome. The hub relaunches you here when its place comes.")
+
 OUTCOME_ERRORS = {
     "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
     "not_thread": "This is a Lounge topic: no turn outcome here (a topic never waits on anyone).",
@@ -291,6 +294,7 @@ OUTCOME_ERRORS = {
     "bad_frame": "Invalid outcome (done | waiting), action (1-200 chars, required for waiting), summary or tags (at most 2).",
     "unknown_tag": UNKNOWN_TAG,
     "parked": "You are waiting for a resource: end your turn without turn_outcome; the hub resumes this thread.",
+    "queued": QUEUED_REFUSAL,
 }
 
 
@@ -302,6 +306,7 @@ RESOURCE_ERRORS = {
                          "use only the resources listed in the conversation context."),
     "forbidden": "Not allowed for this instance.",
     "bad_frame": "Invalid resource name.",
+    "queued": QUEUED_REFUSAL,
 }
 
 
@@ -336,6 +341,7 @@ CI_ERRORS = {
     "too_many": "Too many repos followed in this thread already.",
     "forbidden": "Not allowed for this instance.",
     "bad_frame": "Invalid commits: owner/name and the full 40-character sha of each pushed head, 5 at most.",
+    "queued": QUEUED_REFUSAL,
 }
 
 
@@ -629,6 +635,28 @@ NONTECH_HINT = ("The author of this message is not technical (set by the space a
                 "code, diffs, commands, file names or tool names. Give technical details only if they ask for them")
 
 
+def queued_context(context: Dict[str, Any], code: bool = True) -> str:
+    """Talk turn of a work thread waiting in the agent's queue (`queued`), or the first turn once its place came
+    (`relaunched`). Lounge rights while queued; the hub refuses acquire_resource, turn_outcome and pushed_commits."""
+    if context.get("kind") == "topic":
+        return ""
+    q = context.get("queued")
+    if isinstance(q, dict) and isinstance(q.get("position"), int) and not isinstance(q.get("position"), bool) and q["position"] > 0:
+        holder = q.get("holder")
+        on = f' (you are on the thread "{" ".join(holder.split())[:120]}")' if isinstance(holder, str) and holder.strip() else ""
+        return (f"[This thread waits in your queue, place {q['position']}{on}: a talk turn, it keeps its place. "
+                "Reply to what you are asked, with the Lounge's rights: "
+                + ("read code, infra and logs; run tests; a throwaway spike in a dedicated git worktree. Not now: commit, "
+                   "push, deploy, creating, modifying or deleting a cloud resource, or a shared resource. " if code else
+                   "look things up, read the space's files and data, try something without keeping it. Not now: changing "
+                   "something for good (a file, a script, a scheduled job, a cloud resource) or a shared resource. ")
+                + "Do not call turn_outcome. When its place comes, briefling relaunches you here to do the work.]\n")
+    if context.get("relaunched") is True:
+        return ("[Your place in the queue has come: this thread now holds the hand, the usual rights of a thread apply "
+                "again (commit, push, deploy, shared resources, turn_outcome).]\n")
+    return ""
+
+
 def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> str:
     """Prefix the delivered message with what the agent has not seen yet in this conversation.
 
@@ -689,6 +717,7 @@ def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> s
                  "end this thread with turn_outcome done: if its branch is in origin/main and the worktree has nothing "
                  "uncommitted, remove that worktree and its local branch in the same turn (leave it first).]\n")
     head += spaces_context(context.get("spaces"))
+    head += queued_context(context, code)
     in_charge = context.get("in_charge")
     if isinstance(in_charge, str) and AGENT_NAME_RE.fullmatch(in_charge):
         # Guest of a work thread: the hub refuses the owner's tools to it (not_in_charge); saying so saves a wasted call.
