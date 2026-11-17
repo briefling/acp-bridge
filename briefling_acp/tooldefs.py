@@ -125,7 +125,8 @@ _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 
 ASK_ERRORS = {
     "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge asks here.",
-    "no_turn": "Only during your turn in this conversation.",
+    "no_turn": ("Only during your turn in this conversation, or from a cron job delivering to a thread you are in "
+                "charge of, while no turn runs there."),
     "forbidden": "Not allowed for this instance.",
     "bad_frame": (f"Invalid card: 1 to {ASK_ITEMS_MAX} questions, each with a one-line label (max {ASK_LABEL_MAX}), "
                   f"a question (max {ASK_ITEM_Q_MAX}) and {ASK_OPTIONS_MIN} to {ASK_OPTIONS_MAX} one-line choices "
@@ -2028,9 +2029,13 @@ def build_reminder_propose(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None
 # -- Applets (protocol/applets.ts, docs/design-applets.md): the agent proposes, a lead saves.
 APPLET_NAME_MAX = 60  # protocol/applets.ts
 APPLET_INSTRUCTION_MAX = 4000
-APPLET_FIELDS_MAX = 12
+APPLET_FIELDS_MAX = 24
 APPLET_FILE_FIELDS_MAX = 5
-APPLET_KINDS = ("text", "textarea", "select", "file")
+APPLET_KINDS = ("text", "textarea", "number", "date", "checkbox", "select", "multiselect", "list", "file")
+APPLET_ACCEPTS = ("pdf", "image", "word", "sheet")
+# keys passed through as given (the hub checks each against its kind, protocol/applets.ts appletIn)
+APPLET_FIELD_KEYS = ("showIf", "placeholder", "unit", "min", "max", "of", "accept")
+APPLET_STEPS_MAX = 8
 APPLET_FIELD_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 APPLET_DESC_MAX = 200
 APPLET_EMOJI_MAX = 16
@@ -2043,8 +2048,12 @@ APPLET_ERRORS = {
     "forbidden": "Not allowed here.",
     "bad_frame": (f"Invalid applet: name 1-{APPLET_NAME_MAX} chars on one line; instruction 1-{APPLET_INSTRUCTION_MAX}; "
                   f"1-{APPLET_FIELDS_MAX} fields, each with a unique id (lowercase, [a-z][a-z0-9_]), a label of 1-80 chars, a kind "
-                  f"in {', '.join(APPLET_KINDS)}; a select needs 2-20 distinct options (only a select has options); "
-                  f"{APPLET_FILE_FIELDS_MAX} file fields at most; description: one line of {APPLET_DESC_MAX} chars at most; emoji: "
+                  f"in {', '.join(APPLET_KINDS)}; a select or multiselect needs 2-20 distinct options (only they have options); "
+                  "unit/placeholder only on text, number, list; min/max/integer only on number or a list of numbers (min <= max); "
+                  "of only on list; accept only on file; showIf names an EARLIER field, one test (equals or in: options of that "
+                  "select/multiselect or a text; filled: true/false for any kind); "
+                  f"{APPLET_FILE_FIELDS_MAX} file fields at most; steps (optional): 2-{APPLET_STEPS_MAX}, each a title of "
+                  "1-60 chars and field ids, listing every field once in the order of fields; description: one line of {APPLET_DESC_MAX} chars at most; emoji: "
         "one emoji, nothing else."),
 }
 
@@ -2066,7 +2075,10 @@ APPLET_PROPOSE_SCHEMA = {
         "(MEDIA:<path>) and end with turn_outcome done, which closes the thread. Write the instruction for that future "
         "run: what to produce from which fields, the format and file name, never secrets. It only posts a card; a lead "
         "saves it. To change an existing applet, call applet_list for its id and current content, then pass the id with "
-        "the full new version (every field, not only the changes)."
+        "the full new version (every field, not only the changes). Make the form say it all, never in a hint or a label: a number "
+        "is kind number with its unit (comma accepted, min/max), never « (m) » in the label; repeated values (one per span) are a "
+        "list; never write « optional » (briefling shows it on every field not required); a field or an option that only "
+        "applies in some cases gets showIf (hidden = not asked, not sent); rarely used fields get advanced: true (folded)."
     ),
     "parameters": {
         "type": "object",
@@ -2077,20 +2089,47 @@ APPLET_PROPOSE_SCHEMA = {
             "emoji": {"type": "string", "description": "Its illustration on the tile: ONE emoji that pictures the result (e.g. 📄, 🧾, 📊). No text, no image."},
             "instruction": {"type": "string", "description": f"What the agent does at each launch (max {APPLET_INSTRUCTION_MAX} chars), in the team's language."},
             "fields": {
-                "type": "array", "description": f"The form, in display order (1-{APPLET_FIELDS_MAX}).",
+                "type": "array", "description": f"The form, in display order (1-{APPLET_FIELDS_MAX}); a showIf names a field above it.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "id": {"type": "string", "description": "Stable key, lowercase: [a-z][a-z0-9_]{0,31}."},
                         "label": {"type": "string", "description": "Label shown above the field (max 80 chars)."},
-                        "kind": {"type": "string", "enum": list(APPLET_KINDS), "description": "text: one line (500 chars); textarea: long text (8000); select: one of `options`; file: one attachment (20 MB)."},
-                        "required": {"type": "boolean"},
-                        "hint": {"type": "string", "description": "Optional help under the field (max 200 chars)."},
-                        "options": {"type": "array", "items": {"type": "string"}, "description": "select only: 2-20 distinct choices."},
+                        "kind": {"type": "string", "enum": list(APPLET_KINDS), "description": (
+                            "text: one line (500 chars); textarea: long text (8000); number: a number (sent as typed, comma or point, "
+                            "e.g. « 52,8 »); date: YYYY-MM-DD; checkbox: ticked or not (sent only when ticked); select: one of "
+                            "`options`; multiselect: some of `options`; list: repeated values, one input each (up to 30, sent "
+                            "joined with « ; »); file: one attachment (20 MB).")},
+                        "required": {"type": "boolean", "description": "Must be filled (only when shown). Not required = « optional » shown by briefling."},
+                        "hint": {"type": "string", "description": "Optional help under the field (max 200 chars): what to enter, never the unit nor « optional »."},
+                        "options": {"type": "array", "description": "select / multiselect only: 2-20 distinct choices. A choice is a string, or {label, showIf} to offer it only in some cases.",
+                                    "items": {"anyOf": [{"type": "string"}, {"type": "object", "properties": {"label": {"type": "string"}, "showIf": {"type": "object"}}, "required": ["label", "showIf"]}]}},
+                        "showIf": {"type": "object", "description": (
+                            "Show the field only when an EARLIER field matches: {field, equals: value} | {field, in: [values]} "
+                            "(values of that select/multiselect or a text) | {field, filled: true|false}. Hidden: not asked, not "
+                            "sent, never required."),
+                            "properties": {"field": {"type": "string"}, "equals": {"type": "string"}, "in": {"type": "array", "items": {"type": "string"}}, "filled": {"type": "boolean"}},
+                            "required": ["field"]},
+                        "advanced": {"type": "boolean", "description": "In the folded « Advanced » section: a field rarely needed."},
+                        "unit": {"type": "string", "description": "text, number, list: unit shown after the input and the value (e.g. m, A, bar, m³/h)."},
+                        "placeholder": {"type": "string", "description": "text, textarea, number, list: example shown greyed in the empty input."},
+                        "min": {"type": "number", "description": "number, list of numbers: lowest value."},
+                        "max": {"type": "number", "description": "number, list of numbers: highest value."},
+                        "integer": {"type": "boolean", "description": "number, list of numbers: whole numbers only."},
+                        "of": {"type": "string", "enum": ["text", "number"], "description": "list only: its items (default text)."},
+                        "accept": {"type": "array", "items": {"type": "string", "enum": list(APPLET_ACCEPTS)}, "description": "file only: the file types taken (by extension). Images are previewed in the form."},
                     },
                     "required": ["id", "label", "kind"],
                 },
             },
+            "steps": {"type": "array", "description": (
+                f"Optional: a long form in 2-{APPLET_STEPS_MAX} steps (Back / Next, each step checked before the next, a summary "
+                "before Launch). Each step: a short title and the ids of its fields; together they list every field once, in "
+                "the order of `fields`. A step whose fields are all hidden (showIf) is skipped. Leave it out for a short form "
+                "(one page)."),
+                "items": {"type": "object", "properties": {"title": {"type": "string", "description": "Step title (max 60 chars), e.g. « Pivot »."},
+                                                           "fields": {"type": "array", "items": {"type": "string"}, "description": "Ids of its fields, in order."}},
+                          "required": ["title", "fields"]}},
             "id": {"type": "string", "description": "Only to update an existing applet: its id."},
             "why": {"type": "string", "description": "One sentence shown on the card: what it is for, or what changed."},
         },
@@ -2123,21 +2162,34 @@ def build_applet_propose(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None, 
         if kind not in APPLET_KINDS:
             return None, f"fields[{i}].kind must be one of {', '.join(APPLET_KINDS)}."
         x: Dict[str, Any] = {"id": fid, "label": str(f.get("label") or "").strip(), "kind": kind}
-        if f.get("required") is True:
-            x["required"] = True
+        for flag in ("required", "advanced", "integer"):
+            if f.get(flag) is True:
+                x[flag] = True
         if str(f.get("hint") or "").strip():
             x["hint"] = str(f["hint"]).strip()
-        if kind == "select":
+        if kind in ("select", "multiselect"):
             opts = f.get("options")
             if not isinstance(opts, list) or not 2 <= len(opts) <= 20:
-                return None, f"fields[{i}]: a select needs 2-20 options."
-            x["options"] = [str(o).strip() for o in opts]
+                return None, f"fields[{i}]: a {kind} needs 2-20 options."
+            x["options"] = [o if isinstance(o, dict) else str(o).strip() for o in opts]
+        for k in APPLET_FIELD_KEYS:
+            if f.get(k) not in (None, ""):
+                x[k] = f[k]
         out.append(x)
     if len({f["id"] for f in out}) != len(out):
         return None, "field ids must be unique."
     if sum(1 for f in out if f["kind"] == "file") > APPLET_FILE_FIELDS_MAX:
         return None, f"{APPLET_FILE_FIELDS_MAX} file fields at most."
     draft: Dict[str, Any] = {"name": name, "agent": agent, "instruction": instruction, "fields": out}
+    steps = args.get("steps")
+    if steps not in (None, []):
+        # passed through as given: the hub checks them (protocol/applets.ts stepsIn); only the common slip is named here
+        if not isinstance(steps, list) or not 2 <= len(steps) <= APPLET_STEPS_MAX:
+            return None, f"steps: 2-{APPLET_STEPS_MAX} steps, or leave it out for a one-page form."
+        cited = [i for s in steps if isinstance(s, dict) for i in (s.get("fields") or [])]
+        if cited != [f["id"] for f in out]:
+            return None, "steps: together they must list every field id once, in the order of fields."
+        draft["steps"] = steps
     desc = str(args.get("description") or "").strip()
     if desc:
         if len(desc) > APPLET_DESC_MAX or "\n" in desc:

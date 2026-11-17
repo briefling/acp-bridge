@@ -14,7 +14,7 @@ import json
 import os
 import socket
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from .tools import mcp_tools
 
@@ -43,11 +43,11 @@ def call_bridge(path: str, token: str, tool: str, args: Dict[str, Any]) -> Dict[
                 "detail": f"the briefling bridge is not reachable ({type(e).__name__}): is `briefling-acp` running?"}
 
 
-def handle(msg: Dict[str, Any], path: str, token: str) -> Optional[Dict[str, Any]]:
-    """The JSON-RPC answer to one message (None for a notification)."""
+def _route(msg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[str, Dict[str, Any]]]]:
+    """(answer, None), or (None, (tool, args)) for a valid tools/call; (None, None) for a notification."""
     method, rid = msg.get("method"), msg.get("id")
     if rid is None:
-        return None  # notifications/initialized, notifications/cancelled...
+        return None, None  # notifications/initialized, notifications/cancelled...
     params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
     if method == "initialize":
         asked = params.get("protocolVersion")
@@ -56,19 +56,39 @@ def handle(msg: Dict[str, Any], path: str, token: str) -> Optional[Dict[str, Any
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": "briefling", "version": _version()},
             "instructions": "briefling's tools for this conversation (cards, turn outcome, shared resources, project memory).",
-        }}
+        }}, None
     if method == "ping":
-        return {"id": rid, "result": {}}
+        return {"id": rid, "result": {}}, None
     if method == "tools/list":
-        return {"id": rid, "result": {"tools": mcp_tools()}}
+        return {"id": rid, "result": {"tools": mcp_tools()}}, None
     if method == "tools/call":
         name, args = params.get("name"), params.get("arguments")
         if not isinstance(name, str) or name not in {t["name"] for t in mcp_tools()}:
-            return {"id": rid, "error": {"code": -32602, "message": f"unknown tool: {str(name)[:60]}"}}
-        res = call_bridge(path, token, name, args if isinstance(args, dict) else {})
-        return {"id": rid, "result": {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False)}],
-                                      "isError": res.get("ok") is not True}}
-    return {"id": rid, "error": {"code": -32601, "message": f"{str(method)[:60]} is not supported"}}
+            return {"id": rid, "error": {"code": -32602, "message": f"unknown tool: {str(name)[:60]}"}}, None
+        return None, (name, args if isinstance(args, dict) else {})
+    return {"id": rid, "error": {"code": -32601, "message": f"{str(method)[:60]} is not supported"}}, None
+
+
+def _call_result(rid: Any, res: Dict[str, Any]) -> Dict[str, Any]:
+    return {"id": rid, "result": {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False)}],
+                                  "isError": res.get("ok") is not True}}
+
+
+def handle(msg: Dict[str, Any], path: str, token: str) -> Optional[Dict[str, Any]]:
+    """The JSON-RPC answer to one message (None for a notification); a tool call goes to the bridge's socket."""
+    out, call = _route(msg)
+    if call is None:
+        return out
+    return _call_result(msg.get("id"), call_bridge(path, token, *call))
+
+
+async def handle_async(msg: Dict[str, Any], call: Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
+                       ) -> Optional[Dict[str, Any]]:
+    """Same answers as `handle`, a tool call going to `call(tool, args)` (the HTTP server, inside the bridge)."""
+    out, c = _route(msg)
+    if c is None:
+        return out
+    return _call_result(msg.get("id"), await call(*c))
 
 
 def _version() -> str:

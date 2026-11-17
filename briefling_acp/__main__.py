@@ -5,7 +5,9 @@
     briefling-acp mcp                     the MCP server of briefling's tools (started by the agent, not by hand)
 
 Options: `--cwd DIR` (working directory of the agent's sessions, default the current one), `--env FILE` (credentials
-file, one per agent), `--force` (join again over an existing file), `-- <agent command>` (default `kiro-cli acp`).
+file, one per agent), `--force` (join again over an existing file), `-- <agent command>` (default `kiro-cli acp`),
+`--mcp-port PORT` (also serve briefling's tools over HTTP on 127.0.0.1:PORT, for an agent in a microVM that cannot
+start a host command) with `--mcp-host NAME` (the host name the agent reaches it by, e.g. `host.docker.internal`).
 
 The env file holds the hub URL and this agent's own credentials (Cognito client, written at join, mode 0600) and the
 trusted humans' ids. The client secret is never printed or logged. When Kiro is not logged in and the bridge runs in a
@@ -16,6 +18,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import subprocess
 import sys
 from typing import Dict, List, Optional
@@ -78,7 +81,23 @@ def interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def do_run(env: str, command: List[str], cwd: str) -> int:
+HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+
+
+def port(v: str) -> int:
+    n = int(v)
+    if not 1 <= n <= 65535:
+        raise ValueError(v)
+    return n
+
+
+def host_name(v: str) -> str:
+    if not HOST_RE.match(v):
+        raise ValueError(v)
+    return v
+
+
+def do_run(env: str, command: List[str], cwd: str, mcp_port: Optional[int] = None, mcp_host: str = "127.0.0.1") -> int:
     from .bridge import Bridge
     if any(a in ("--trust-all-tools", "-a") for a in command):
         print("briefling-acp: refusing --trust-all-tools: pre-authorize tools in the agent's own config instead", file=sys.stderr)
@@ -88,7 +107,7 @@ def do_run(env: str, command: List[str], cwd: str) -> int:
     for attempt in (1, 2):
         try:
             bridge = Bridge(conf, command, os.path.abspath(cwd), state_path=env + ".sessions.json",
-                            socket_path=socket_path(env))
+                            socket_path=socket_path(env), mcp_port=mcp_port, mcp_host=mcp_host)
         except ValueError:
             print('briefling-acp: not joined yet: run `briefling-acp "<invitation link>"` (the link the space admin '
                   "sent you).", file=sys.stderr)
@@ -127,8 +146,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--env", default=DEFAULT_ENV, help=f"credentials file (default {DEFAULT_ENV})")
     p.add_argument("--app", help="briefling app URL (only with a bare code instead of the link)")
     p.add_argument("--force", action="store_true", help="join again over an existing credentials file")
+    p.add_argument("--mcp-port", type=port, metavar="PORT",
+                   help="also serve briefling's tools over HTTP on 127.0.0.1:PORT and declare that server to agents "
+                        "that take one (an agent in a microVM cannot start the local one)")
+    p.add_argument("--mcp-host", type=host_name, default="127.0.0.1", metavar="NAME",
+                   help="host name the agent reaches that port by (default 127.0.0.1; Docker Sandboxes: "
+                        "host.docker.internal). The server listens on 127.0.0.1 only")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
+    if args.mcp_host != "127.0.0.1" and args.mcp_port is None:
+        p.error("--mcp-host needs --mcp-port")
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
@@ -136,7 +163,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc = do_join(args.link, args.app, args.env, args.force)
         if rc:
             return rc
-    return do_run(args.env, command, args.cwd)
+    return do_run(args.env, command, args.cwd, args.mcp_port, args.mcp_host)
 
 
 if __name__ == "__main__":

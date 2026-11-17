@@ -11,7 +11,9 @@ briefling's tools (`thread.outcome`, `thread.propose`, `issue.propose`, `about.p
 Tools: the agent gets them from a local MCP server (`briefling-acp mcp`, declared in `session/new`), which relays each
 call to this process over a Unix socket in a directory only this user can open. Each conversation's server carries
 its own random token, so a call is tied to its conversation, and it only counts while that conversation has a turn
-running (the hub checks the turn again).
+running (the hub checks the turn again). With `--mcp-port` (an agent in a microVM, which can start no host command),
+the bridge also serves them over HTTP on 127.0.0.1 and declares that `http` server instead, same token in a header
+(`mcp_http.py`).
 
 Gates (the hub already applied its own: membership, roles): a message or a Stop counts only if its author is in
 BRIEFLING_ALLOWED_USERS (the trusted humans the hub listed at join, Cognito subs). Empty list = nobody (fail closed).
@@ -31,10 +33,12 @@ from collections import OrderedDict, deque
 from typing import Any, Dict, List, Optional, Set
 
 import aiohttp
+from aiohttp import web
 
 from . import tools as tl
 from .acp import AcpAgent, AcpError
 from .join import PROTOCOL, PROTOCOL_VERSION
+from . import mcp_http
 from .mcp import SOCKET_ENV, TOKEN_ENV
 from .tooldefs import HUB_UNREACHABLE, NO_TEXT, with_context
 
@@ -181,7 +185,7 @@ class Turn:
 
 class Bridge:
     def __init__(self, env: Dict[str, str], command: List[str], cwd: str, state_path: Optional[str] = None,
-                 socket_path: Optional[str] = None):
+                 socket_path: Optional[str] = None, mcp_port: Optional[int] = None, mcp_host: str = "127.0.0.1"):
         self.ws_url = env.get("BRIEFLING_WS_URL", "")
         self.token_url = env.get("BRIEFLING_TOKEN_URL", "")
         self.client_id = env.get("BRIEFLING_CLIENT_ID", "")
@@ -215,6 +219,10 @@ class Bridge:
         self.socket_server: Optional[asyncio.AbstractServer] = None
         self.tokens: Dict[str, str] = {}  # MCP token -> thread (this process only: a restart issues new ones)
         self.thread_token: Dict[str, str] = {}
+        self.mcp_port = mcp_port   # HTTP MCP server on 127.0.0.1 (None = off; 0 = any free port, tests)
+        self.mcp_host = mcp_host   # the host name the agent uses to reach it (sbx: host.docker.internal)
+        self.mcp_runner: Optional[web.AppRunner] = None
+        self._warned_no_http = False
 
     # -- state ----------------------------------------------------------------------
 
@@ -283,6 +291,12 @@ class Bridge:
             await self.agent.stop()
             raise SystemExit(1)
         await self._start_socket()
+        try:
+            await self._start_http()
+        except OSError as e:
+            logger.error("cannot serve briefling's MCP tools on 127.0.0.1:%s: %s", self.mcp_port, e)
+            await self.close()
+            raise SystemExit(1)
         self.session = aiohttp.ClientSession()
         backoff = 0
         try:
@@ -327,6 +341,9 @@ class Bridge:
                 os.unlink(self.socket_path)
             except OSError:
                 pass
+        if self.mcp_runner is not None:
+            await self.mcp_runner.cleanup()
+            self.mcp_runner = None
         if self.ws is not None and not self.ws.closed:
             await self.ws.close()
         if self.session:
@@ -462,13 +479,22 @@ class Bridge:
 
     def mcp_servers(self, thread: str) -> List[Dict[str, Any]]:
         """The MCP server declared in session/new|load for this conversation: this package's `mcp` subcommand, with
-        the socket path and this conversation's token in its environment (ACP stdio server, mandatory for agents)."""
+        the socket path and this conversation's token in its environment (ACP stdio server, mandatory for agents);
+        or, with `--mcp-port` and an agent that takes HTTP servers, the bridge's own HTTP server, token in a header."""
         if self.socket_server is None:
             return []
         token = self.thread_token.get(thread)
         if token is None:
             token = secrets.token_urlsafe(32)
             self.thread_token[thread], self.tokens[token] = token, thread
+        if self.mcp_runner is not None:
+            if (self.agent.capabilities.get("mcpCapabilities") or {}).get("http"):
+                return [{"type": "http", "name": MCP_SERVER, "url": f"http://{self.mcp_host}:{self.mcp_port}{mcp_http.PATH}",
+                         "headers": [{"name": "Authorization", "value": f"Bearer {token}"}]}]
+            if not self._warned_no_http:
+                self._warned_no_http = True
+                logger.warning("--mcp-port: the agent does not advertise MCP over HTTP (mcpCapabilities.http): "
+                               "declaring the local stdio server instead")
         pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return [{"name": MCP_SERVER, "command": sys.executable, "args": ["-m", "briefling_acp", "mcp"],
                  "env": [{"name": SOCKET_ENV, "value": self.socket_path}, {"name": TOKEN_ENV, "value": token},
@@ -491,6 +517,23 @@ class Bridge:
         finally:
             os.umask(old)
         os.chmod(self.socket_path, 0o600)
+
+    async def _start_http(self) -> None:
+        """The HTTP MCP server (`--mcp-port`): loopback only, whatever the host name the agent is given."""
+        if self.mcp_port is None:
+            return
+        runner = web.AppRunner(mcp_http.app(lambda tok: self.tokens.get(tok), self.tool_call), access_log=None)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", self.mcp_port)
+        try:
+            await site.start()
+        except OSError:
+            await runner.cleanup()
+            raise
+        self.mcp_runner = runner
+        self.mcp_port = site._server.sockets[0].getsockname()[1]
+        logger.info("briefling's MCP tools also served on http://127.0.0.1:%s%s (agent URL host: %s)",
+                    self.mcp_port, mcp_http.PATH, self.mcp_host)
 
     async def _on_socket(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:

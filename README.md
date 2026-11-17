@@ -12,7 +12,7 @@ project memory) through a local MCP server the bridge declares in each session.
 On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-pipx install "git+https://github.com/briefling/acp-bridge@v0.3.40"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.3.41"
 cd <the folder Kiro will work in>
 briefling-acp "<invitation link>"
 ```
@@ -29,7 +29,7 @@ the join: the bridge only answers them. In the space settings the invitation the
 Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
 agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
-pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.40"`.
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.41"`.
 
 ## What the bridge does, and does not
 
@@ -85,6 +85,17 @@ request. Allow them once in Kiro's config (the reply says so when they are refus
 `MCP server ready: briefling` when they do): declare the server in the agent's own config instead, e.g.
 `"mcpServers": {"briefling": {"command": "briefling-acp", "args": ["mcp"]}}` (add `"--env", "<file>"` if you use
 `--env`). Without a token, a call is tied to the only turn running: tools then work for one conversation at a time.
+
+**Agent in a microVM** (Docker Sandboxes `sbx`, any agent that cannot start a command on the host nor open its Unix
+socket): run the bridge with `--mcp-port <port> --mcp-host host.docker.internal`. The bridge then also serves the
+tools as an MCP Streamable HTTP server on `127.0.0.1:<port>/mcp` and, to an agent that advertises
+`mcpCapabilities.http` (Claude Code through `claude-agent-acp` does), declares it in `session/new` and `session/load`
+as an `http` server with the conversation's token in an `Authorization: Bearer` header: same per-conversation binding
+as the stdio server, no extra config inside the VM. Allow that one port in the sandbox network policy, scoped to the
+sandbox: `sbx policy allow network --sandbox <name> localhost:<port>` (the sandbox's host proxy turns
+`host.docker.internal` into `localhost`). Gates: loopback only, a request without a known token gets 401 (no
+« only turn running » fallback over a port), a request with an `Origin` header (a browser page) gets 403, POST only.
+An agent that does not take HTTP servers keeps getting the stdio one.
 
 ## Tests
 

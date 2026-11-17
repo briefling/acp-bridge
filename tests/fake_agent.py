@@ -7,11 +7,15 @@ otherwise echoes the prompt's last line in three chunks."""
 
 import os
 import subprocess
+import urllib.error
+import urllib.request
 
 import json
 import sys
 import threading
 import time
+
+HTTP = os.environ.get("FAKE_MCP_HTTP") == "1"  # advertise mcpCapabilities.http, like claude-agent-acp
 
 sessions = {}  # sessionId -> prompts count
 lock = threading.Lock()
@@ -24,7 +28,11 @@ mcp_proc = {}  # sessionId -> (process, next id) of its first MCP server, starte
 
 
 def mcp_rpc(sid, method, params):
-    """One request to the session's MCP server (newline-delimited JSON-RPC on its stdio), as an agent does."""
+    """One request to the session's MCP server (newline-delimited JSON-RPC on its stdio, or one POST per message to
+    an `http` server), as an agent does."""
+    conf = mcp_conf[sid][0]
+    if conf.get("type") == "http":
+        return http_rpc(conf, method, params)
     if sid not in mcp_proc:
         conf = mcp_conf[sid][0]
         env = {**os.environ, **{e["name"]: e["value"] for e in conf.get("env", [])}}
@@ -42,6 +50,19 @@ def mcp_rpc(sid, method, params):
     p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": mcp_proc[sid][1], "method": method, "params": params}) + "\n")
     p.stdin.flush()
     return json.loads(p.stdout.readline())
+
+
+def http_rpc(conf, method, params):
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+               **{h["name"]: h["value"] for h in conf.get("headers", [])}}
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    url = conf["url"].replace("//host.docker.internal:", "//127.0.0.1:")  # what the sandbox's host proxy does
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # no HTTP(S)_PROXY from the test env
+    try:
+        with opener.open(urllib.request.Request(url, body, headers), timeout=60) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return {"result": {"content": [{"text": json.dumps({"http": e.code})}], "isError": True}}
 
 
 def tool_lines(sid, text):
@@ -126,7 +147,8 @@ def prompt(rid, p):
         send({"id": rid, "result": {"stopReason": "end_turn"}})
         return
     if "MCP" in text:
-        chunk(sid, "mcp: " + json.dumps([{**s, "env": sorted(e["name"] for e in s.get("env", []))} for s in mcp_conf.get(sid, [])]))
+        chunk(sid, "mcp: " + json.dumps([{**s, "env": sorted(e["name"] for e in s.get("env", []))} if "env" in s else s
+                                          for s in mcp_conf.get(sid, [])]))
         send({"id": rid, "result": {"stopReason": "end_turn"}})
         return
     if "PERMTOOL" in text:
@@ -158,7 +180,7 @@ def main():
         if m is None:
             replies[rid] = msg
         elif m == "initialize":
-            send({"id": rid, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True},
+            send({"id": rid, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, **({"mcpCapabilities": {"http": True}} if HTTP else {})},
                                         "agentInfo": {"name": "fake", "version": "1"}}})
         elif m == "session/new":
             sid = f"s{len(sessions) + 1}"

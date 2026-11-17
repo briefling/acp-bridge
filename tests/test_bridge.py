@@ -1,6 +1,7 @@
 """The bridge against a fake hub (aiohttp on 127.0.0.1: token endpoint + WebSocket) and a scripted ACP agent."""
 
 import asyncio
+import contextlib
 import json
 import os
 import stat
@@ -64,6 +65,13 @@ class Hub:
 
 @pytest.fixture
 async def env(tmp_path):
+    async with running(tmp_path) as hb:
+        yield hb
+
+
+@contextlib.asynccontextmanager
+async def running(tmp_path, **bridge_kw):
+    """A fake hub and a bridge connected to it (bridge_kw: extra Bridge options)."""
     hub = Hub()
     app = web.Application()
     app.router.add_post("/token", hub.token)
@@ -75,7 +83,7 @@ async def env(tmp_path):
     port = site._server.sockets[0].getsockname()[1]
     conf = {"BRIEFLING_WS_URL": f"ws://127.0.0.1:{port}/ws", "BRIEFLING_TOKEN_URL": f"http://127.0.0.1:{port}/token",
             "BRIEFLING_CLIENT_ID": "cid", "BRIEFLING_CLIENT_SECRET": "secret", "BRIEFLING_ALLOWED_USERS": f"{TRUSTED},x"}
-    bridge = Bridge(conf, FAKE, str(tmp_path), state_path=str(tmp_path / "s.json"))
+    bridge = Bridge(conf, FAKE, str(tmp_path), state_path=str(tmp_path / "s.json"), **bridge_kw)
     task = asyncio.create_task(bridge.run())
     assert (await hub.next())["type"] == "subscribe"
     yield hub, bridge
@@ -267,7 +275,7 @@ def test_one_command_joins_then_runs_and_never_prints_the_secret(tmp_path, capsy
         assert app == "https://b.example" and len(code) == 32
         return "wss://hub.example", joined
     monkeypatch.setattr(cli.join, "redeem", redeem)
-    monkeypatch.setattr(cli, "do_run", lambda env, command, cwd: runs.append((env, command, cwd)) or 0)
+    monkeypatch.setattr(cli, "do_run", lambda env, command, cwd, *_: runs.append((env, command, cwd)) or 0)
     path = tmp_path / "conf" / "bridge.env"
     link = f"https://b.example/agent.md?code={'A' * 32}"
     assert cli.main([link, "--env", str(path)]) == 0
