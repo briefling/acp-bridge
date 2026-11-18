@@ -84,8 +84,9 @@ async def running(tmp_path, **bridge_kw):
     conf = {"BRIEFLING_WS_URL": f"ws://127.0.0.1:{port}/ws", "BRIEFLING_TOKEN_URL": f"http://127.0.0.1:{port}/token",
             "BRIEFLING_CLIENT_ID": "cid", "BRIEFLING_CLIENT_SECRET": "secret", "BRIEFLING_ALLOWED_USERS": f"{TRUSTED},x"}
     bridge = Bridge(conf, FAKE, str(tmp_path), state_path=str(tmp_path / "s.json"), **bridge_kw)
-    task = asyncio.create_task(bridge.run())
-    assert (await hub.next())["type"] == "subscribe"
+    task = hub.task = asyncio.create_task(bridge.run())
+    hub.subscribe = await hub.next()
+    assert hub.subscribe["type"] == "subscribe"
     yield hub, bridge
     bridge.running = False
     task.cancel()

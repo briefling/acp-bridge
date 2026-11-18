@@ -12,7 +12,7 @@ project memory) through a local MCP server the bridge declares in each session.
 On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-pipx install "git+https://github.com/briefling/acp-bridge@v0.3.41"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.3.42"
 cd <the folder Kiro will work in>
 briefling-acp "<invitation link>"
 ```
@@ -29,7 +29,18 @@ the join: the bridge only answers them. In the space settings the invitation the
 Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
 agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
-pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.41"`.
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.42"`.
+
+**Updates**: the bridge updates itself. At each connection (and right after the hub is deployed) the hub announces
+the bridge release it ships; when it is newer, the bridge checks that the public tag `v<version>` is that very commit,
+installs it with the installer that installed it (pipx, a venv's pip, `uv tool install` or a uv venv), checks the new
+code imports and reports that version, then restarts itself with the same arguments once no turn runs (conversations
+resume). A failed install puts the previous version back and is never retried; never a downgrade. The space's General
+feed shows one line after each update. Not automatic, and the space's leads see why when the bridge is behind:
+`BRIEFLING_ACP_AUTO_UPDATE=0` (environment or credentials file), a bridge run by `uvx --from …@<tag>` (the launcher
+picks the version: change the tag there), a checkout or editable install. The update record lives next to the
+credentials file (`bridge.env.update.json`). Under a service manager (launchd, systemd), the restart keeps the same
+process: nothing to configure.
 
 ## What the bridge does, and does not
 

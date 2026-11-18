@@ -38,9 +38,11 @@ from aiohttp import web
 from . import tools as tl
 from .acp import AcpAgent, AcpError
 from .join import PROTOCOL, PROTOCOL_VERSION
-from . import mcp_http
+from . import __version__, mcp_http, selfupdate
 from .mcp import SOCKET_ENV, TOKEN_ENV
 from .tooldefs import HUB_UNREACHABLE, NO_TEXT, with_context
+
+UPDATE_IDLE_POLL_S = 5  # how often a bridge holding a new release looks for a moment with no turn
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +187,8 @@ class Turn:
 
 class Bridge:
     def __init__(self, env: Dict[str, str], command: List[str], cwd: str, state_path: Optional[str] = None,
-                 socket_path: Optional[str] = None, mcp_port: Optional[int] = None, mcp_host: str = "127.0.0.1"):
+                 socket_path: Optional[str] = None, mcp_port: Optional[int] = None, mcp_host: str = "127.0.0.1",
+                 update_path: Optional[str] = None):
         self.ws_url = env.get("BRIEFLING_WS_URL", "")
         self.token_url = env.get("BRIEFLING_TOKEN_URL", "")
         self.client_id = env.get("BRIEFLING_CLIENT_ID", "")
@@ -213,6 +216,14 @@ class Bridge:
         self.rev = 0
         self.last_turn_at: Dict[str, int] = {}
         self.running = False
+        # Self-update (selfupdate.py): on unless BRIEFLING_ACP_AUTO_UPDATE=0; update_path = its record (None = off).
+        self.update_path = update_path
+        self.auto_update = update_path is not None and selfupdate.enabled(env.get(selfupdate.OFF_ENV))
+        self.install: Optional[selfupdate.Install] = None
+        self.updated_from = os.environ.pop(selfupdate.FROM_ENV, "") or None
+        self.update_task: Optional[asyncio.Task] = None
+        self.restart = False   # a release is installed: run() returns and the caller re-executes the bridge
+        self.in_flight = 0     # turns delivered and not ended yet (waiting on their conversation's lock included)
         self.connected = asyncio.Event()
         self.waiting: Dict[str, asyncio.Future] = {}  # client_id -> hub answer to a tool frame
         self.socket_path = socket_path
@@ -308,7 +319,7 @@ class Bridge:
                                                             timeout=aiohttp.ClientWSTimeout(ws_close=10))
                     if self.ws.protocol != PROTOCOL:
                         raise RuntimeError(f"hub did not accept the {PROTOCOL} subprotocol")
-                    await self.send({"type": "subscribe"})
+                    await self.send({"type": "subscribe", "bridge": await self.bridge_report()})
                     logger.info("connected to the hub")
                     self.connected.set()
                     await self._read_loop(opened)
@@ -387,6 +398,9 @@ class Bridge:
         elif kind == "subscribed":
             if frame.get("denied"):
                 logger.warning("hub refused spaces: %s", ",".join(map(str, frame["denied"])))
+            self.on_release(frame.get("release"))
+        elif kind == "release":  # pushed by the hub right after a deploy
+            self.on_release(frame.get("release"))
         elif kind in ("ack", "resource.result", "memory.result", "introspect.result", "memory.proposed"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():
@@ -414,6 +428,7 @@ class Bridge:
         if author not in self.allowed:
             logger.warning("message dropped in %s: author not in BRIEFLING_ALLOWED_USERS", thread)
             return
+        self.in_flight += 1
         self._spawn(self.run_turn(thread, frame))
 
     async def _session_for(self, thread: str) -> str:
@@ -459,6 +474,7 @@ class Bridge:
                 self.turns.pop(thread, None)
                 if turn.late:
                     turn.late.cancel()
+                self.in_flight -= 1
                 await self.send({"type": "turn.ended", "thread": thread, "at": self.turn_at(thread),
                                  **({"stopped": True, "acted": turn.acted} if stopped else {})})
 
@@ -517,6 +533,46 @@ class Bridge:
         finally:
             os.umask(old)
         os.chmod(self.socket_path, 0o600)
+
+    # -- self-update (selfupdate.py) ----------------------------------------------------
+
+    async def bridge_report(self) -> Dict[str, Any]:
+        """`subscribe.bridge`: this version, why it will not update by itself, and the version it was updated from
+        (first connection after a self-update only: the hub posts one notice)."""
+        out: Dict[str, Any] = {"version": __version__}
+        if self.update_path is not None:
+            if self.install is None:
+                self.install = await asyncio.get_running_loop().run_in_executor(None, selfupdate.Install.here)
+            why = selfupdate.blocked(self.install, self.auto_update, __version__, selfupdate.read_state(self.update_path))
+            if why:
+                out["update"] = why
+        if self.updated_from:
+            out["updated_from"], self.updated_from = self.updated_from, None
+        return out
+
+    def on_release(self, release: Any) -> None:
+        rel = selfupdate.valid_release(release)
+        if not self.auto_update or rel is None or not selfupdate.is_newer(rel["version"], __version__):
+            return
+        if self.update_task is not None and not self.update_task.done():
+            return  # one at a time
+        self.update_task = asyncio.create_task(self._self_update(rel))
+
+    async def _self_update(self, rel: Dict[str, str]) -> None:
+        loop = asyncio.get_running_loop()
+        if self.install is None:
+            self.install = await loop.run_in_executor(None, selfupdate.Install.here)
+        ok = await loop.run_in_executor(None, selfupdate.apply, self.install, rel, __version__, self.update_path)
+        if not ok:
+            return
+        while self.running and (self.in_flight or self.turns):
+            await asyncio.sleep(UPDATE_IDLE_POLL_S)
+        if not self.running:
+            return
+        logger.info("restarting into bridge %s", rel["version"])
+        self.restart, self.running = True, False
+        if self.ws is not None and not self.ws.closed:
+            await self.ws.close()  # ends the read loop; run() then closes the rest and returns
 
     async def _start_http(self) -> None:
         """The HTTP MCP server (`--mcp-port`): loopback only, whatever the host name the agent is given."""
