@@ -11,6 +11,7 @@ the hub and answers with the tool result. Standard library only, no MCP SDK: the
 `tools/list`, `tools/call` and `ping`, newline-delimited JSON-RPC 2.0 like ACP.
 """
 
+import io
 import json
 import os
 import socket
@@ -105,7 +106,9 @@ def _version() -> str:
 
 
 def serve(path: str, token: str, stdin=None, stdout=None) -> int:
-    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
+    # MCP stdio is UTF-8 JSON; Python's console default on Windows is the ANSI code page (cp1252: « à » read as « Ã »).
+    stdin = stdin or io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
+    stdout = stdout or io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", newline="\n")
     for line in stdin:
         try:
             msg = json.loads(line)

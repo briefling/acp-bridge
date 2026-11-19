@@ -270,6 +270,34 @@ def test_mcp_server_speaks_initialize_list_and_refuses_the_rest():
     assert got[5]["result"]["protocolVersion"] == mcp.VERSIONS[0]
 
 
+def test_mcp_stdio_is_utf8_whatever_the_console_code_page(tmp_path):
+    """`briefling-acp mcp` as the agent starts it, with Windows' console default (cp1252) forced: an accented argument
+    reaches the bridge intact (it read « Ã » on Julien's machine) and the answer goes back as UTF-8."""
+    import socket as so
+    import subprocess
+    import threading
+    srv = so.create_server(("127.0.0.1", 0))
+    ep = tmp_path / "bridge.env.sock"
+    ep.write_text(json.dumps({"port": srv.getsockname()[1], "key": "k"}))
+    got = []
+
+    def bridge():
+        c, _ = srv.accept()
+        with c:
+            got.append(json.loads(c.makefile("rb").readline()))
+            c.sendall((json.dumps({"ok": True, "detail": "reçu à l'instant"}) + "\n").encode())
+    threading.Thread(target=bridge, daemon=True).start()
+    call = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "memory_search", "arguments": {"query": "déjà là"}}}
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0", "BRIEFLING_ACP_SOCKET": str(ep),
+           "BRIEFLING_ACP_TOKEN": "t", "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+    p = subprocess.run([sys.executable, "-m", "briefling_acp", "mcp"], input=json.dumps(call, ensure_ascii=False).encode() + b"\n",
+                       capture_output=True, env=env, timeout=30)
+    srv.close()
+    assert got and got[0]["args"] == {"query": "déjà là"} and got[0]["key"] == "k", p.stderr
+    text = json.loads(p.stdout.decode("utf-8"))["result"]["content"][0]["text"]
+    assert "reçu à l'instant" in json.loads(text)["detail"]
+
+
 def test_tool_schemas_are_the_plugins_own():
     """tooldefs.py is the Hermes plugin's file (symlink in the repo, a copy once published): same schemas and texts."""
     from briefling_acp import tooldefs
