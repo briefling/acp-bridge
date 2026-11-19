@@ -65,8 +65,16 @@ DEDUP_KEEP = 2000
 _B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 NO_REPLY = "(the agent ended its turn without a reply: {reason})"
-AGENT_DOWN = ("(the agent could not run this turn: {why}. The bridge log on the agent host has the details; "
-              "for Kiro, check `kiro-cli whoami`.)")
+AGENT_DOWN = "(the agent could not run this turn: {why}. The bridge log on the agent host has the details{hint}.)"
+KIRO_HINT = "; for Kiro, check `kiro-cli whoami`"
+
+
+def agent_down(command: List[str], why: str) -> str:
+    """The turn's error line; the Kiro login hint only when the agent is Kiro (Qwen, opencode... have their own)."""
+    name = re.split(r"[\\/]", command[0])[-1].lower() if command else ""
+    return AGENT_DOWN.format(why=why, hint=KIRO_HINT if name.startswith("kiro") else "")
+
+
 REFUSED = "Refused (not pre-authorized in the agent's own configuration): {title}"
 TOOLS_HINT = ("briefling's tools need a one-time allow rule in the agent's config (Kiro: `@briefling` in the agent's "
               "allowedTools, or a `mcp` allow rule for `briefling/*` in V3 permissions); see the bridge README.")
@@ -201,6 +209,7 @@ class Bridge:
         if not self.allowed:
             logger.warning("BRIEFLING_ALLOWED_USERS is empty: every message will be dropped")
         self.agent = AcpAgent(command, cwd)
+        self.command = command
         self.state_path = state_path
         self.sessions: Dict[str, str] = self._load_state()  # thread -> ACP sessionId
         self.loaded: Set[str] = set()  # sessions known to the current agent process
@@ -467,7 +476,7 @@ class Bridge:
                 if self.agent.stderr_tail:
                     logger.warning("agent stderr (last lines): %s", self.agent.stderr_tail[-800:])
                 reason = None
-                turn.text += ("\n\n" if turn.text else "") + AGENT_DOWN.format(why=type(e).__name__ if isinstance(e, OSError) else str(e)[:200])
+                turn.text += ("\n\n" if turn.text else "") + agent_down(self.command, type(e).__name__ if isinstance(e, OSError) else str(e)[:200])
             except Exception:
                 logger.exception("turn crashed in %s", thread)
                 reason = None

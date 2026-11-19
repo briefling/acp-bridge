@@ -348,3 +348,12 @@ exec {sys.executable} {FAKE[1]}
     monkeypatch.setattr(cli, "interactive", lambda: False)  # not a terminal (service manager): no login, exit 1
     assert cli.do_run(str(tmp_path / "e"), [str(kiro), "acp"], str(tmp_path)) == 1
     assert not (tmp_path / "logged").exists()
+
+
+def test_agent_down_hint_only_for_kiro():
+    # the Kiro login hint showed under a Qwen Code failure (Windows test): only a kiro-cli agent gets it
+    qwen = bridge_mod.agent_down(["C:\\nodejs\\qwen.cmd", "--acp"], "-32000: Authentication required")
+    assert qwen == "(the agent could not run this turn: -32000: Authentication required. The bridge log on the agent host has the details.)"
+    assert "kiro-cli whoami" in bridge_mod.agent_down(["/usr/local/bin/kiro-cli", "acp"], "x")
+    assert "kiro-cli whoami" in bridge_mod.agent_down(["C:\\Tools\\kiro-cli.exe", "acp"], "x")
+    assert "kiro" not in bridge_mod.agent_down([], "x")
