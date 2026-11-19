@@ -9,7 +9,9 @@ briefling's tools (`thread.outcome`, `thread.propose`, `issue.propose`, `about.p
 `ci.watch`, `memory.search|read|propose`), the same as the Hermes plugin's.
 
 Tools: the agent gets them from a local MCP server (`briefling-acp mcp`, declared in `session/new`), which relays each
-call to this process over a Unix socket in a directory only this user can open. Each conversation's server carries
+call to this process over a Unix socket in a directory only this user can open (Windows, which has no Unix socket in
+asyncio: TCP on 127.0.0.1, any free port, each call carrying a random key read from an endpoint file at the socket's
+place, in the same private directory; `mcp.py`). Each conversation's server carries
 its own random token, so a call is tied to its conversation, and it only counts while that conversation has a turn
 running (the hub checks the turn again). With `--mcp-port` (an agent in a microVM, which can start no host command),
 the bridge also serves them over HTTP on 127.0.0.1 and declares that `http` server instead, same token in a header
@@ -188,7 +190,7 @@ class Turn:
 class Bridge:
     def __init__(self, env: Dict[str, str], command: List[str], cwd: str, state_path: Optional[str] = None,
                  socket_path: Optional[str] = None, mcp_port: Optional[int] = None, mcp_host: str = "127.0.0.1",
-                 update_path: Optional[str] = None):
+                 update_path: Optional[str] = None, mcp_tcp: Optional[bool] = None):
         self.ws_url = env.get("BRIEFLING_WS_URL", "")
         self.token_url = env.get("BRIEFLING_TOKEN_URL", "")
         self.client_id = env.get("BRIEFLING_CLIENT_ID", "")
@@ -228,6 +230,9 @@ class Bridge:
         self.waiting: Dict[str, asyncio.Future] = {}  # client_id -> hub answer to a tool frame
         self.socket_path = socket_path
         self.socket_server: Optional[asyncio.AbstractServer] = None
+        # Windows: loopback TCP + key instead of the Unix socket (None = by platform; True on Unix for the tests).
+        self.mcp_tcp = sys.platform == "win32" if mcp_tcp is None else mcp_tcp
+        self.socket_key = ""
         self.tokens: Dict[str, str] = {}  # MCP token -> thread (this process only: a restart issues new ones)
         self.thread_token: Dict[str, str] = {}
         self.mcp_port = mcp_port   # HTTP MCP server on 127.0.0.1 (None = off; 0 = any free port, tests)
@@ -526,6 +531,9 @@ class Bridge:
             os.unlink(self.socket_path)  # left by a previous run
         except FileNotFoundError:
             pass
+        if self.mcp_tcp:
+            await self._start_tcp()
+            return
         old = os.umask(0o177)
         try:
             self.socket_server = await asyncio.start_unix_server(self._on_socket, path=self.socket_path,
@@ -533,6 +541,19 @@ class Bridge:
         finally:
             os.umask(old)
         os.chmod(self.socket_path, 0o600)
+
+    async def _start_tcp(self) -> None:
+        """The Unix socket's stand-in: 127.0.0.1 on a free port, and at the socket's path a file {port, key} that only
+        this user can read (private directory; Windows: the user profile's own ACL). Any local process can open the port,
+        so every call must carry the key, the token-less fallback included."""
+        self.socket_key = secrets.token_urlsafe(32)
+        self.socket_server = await asyncio.start_server(self._on_socket, "127.0.0.1", 0, limit=SOCKET_LINE_MAX)
+        port = self.socket_server.sockets[0].getsockname()[1]
+        tmp = self.socket_path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"port": port, "key": self.socket_key}, f)
+        os.replace(tmp, self.socket_path)
 
     # -- self-update (selfupdate.py) ----------------------------------------------------
 
@@ -598,7 +619,12 @@ class Bridge:
                 req = json.loads(line)
             except ValueError:
                 req = None
-            res = await self.tool_call(req) if isinstance(req, dict) else {"ok": False, "error": "bad_request"}
+            if not isinstance(req, dict):
+                res = {"ok": False, "error": "bad_request"}
+            elif self.socket_key and not secrets.compare_digest(str(req.get("key") or ""), self.socket_key):
+                res = {"ok": False, "error": "forbidden", "detail": "wrong bridge key"}
+            else:
+                res = await self.tool_call(req)
             writer.write((json.dumps(res, ensure_ascii=False) + "\n").encode())
             await writer.drain()
         except (asyncio.TimeoutError, ConnectionError, asyncio.LimitOverrunError, ValueError):

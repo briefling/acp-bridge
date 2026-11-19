@@ -255,6 +255,17 @@ def test_run_exits_when_the_agent_cannot_start(tmp_path, caplog):
     assert "the agent command failed to start" in caplog.text and "You are not logged in" in caplog.text
 
 
+def test_agent_command_resolved_through_pathext_on_windows_only(tmp_path, monkeypatch):
+    from briefling_acp import acp
+    cmd = ["npx", "-y", "@agentclientprotocol/claude-agent-acp@1"]
+    monkeypatch.setattr(acp, "WINDOWS", False)
+    assert acp.resolve(cmd) == cmd, "elsewhere exec searches PATH itself"
+    monkeypatch.setattr(acp, "WINDOWS", True)
+    monkeypatch.setattr(acp.shutil, "which", lambda n: {"npx": r"C:\\node\\npx.CMD"}.get(n))
+    assert acp.resolve(cmd) == [r"C:\\node\\npx.CMD", *cmd[1:]]
+    assert acp.resolve(["nope", "acp"]) == ["nope", "acp"], "not found: the start fails as usual"
+
+
 def test_run_refuses_trust_all_tools(tmp_path, capsys):
     assert cli.main(["--env", str(tmp_path / "e"), "--", "kiro-cli", "acp", "--trust-all-tools"]) == 2
     assert "refusing --trust-all-tools" in capsys.readouterr().err
@@ -283,7 +294,8 @@ def test_one_command_joins_then_runs_and_never_prints_the_secret(tmp_path, capsy
     assert runs == [(str(path), ["kiro-cli", "acp"], ".")], "joined, then runs Kiro by default"
     out = capsys.readouterr()
     assert "s3cr3t" not in out.out + out.err
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    if os.name != "nt":  # Windows has no mode bits: the user profile's ACL keeps the file private
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     env = cli.read_env(str(path))
     assert env["BRIEFLING_CLIENT_SECRET"] == "s3cr3t-xyz" and env["BRIEFLING_ALLOWED_USERS"] == TRUSTED
     assert env["BRIEFLING_WS_URL"] == "wss://hub.example"
@@ -294,15 +306,23 @@ def test_one_command_joins_then_runs_and_never_prints_the_secret(tmp_path, capsy
 
 def test_kiro_not_logged_in_starts_kiro_login_once_then_retries(tmp_path, monkeypatch):
     """A fake `kiro-cli`: refuses `acp` until `login` ran (Kiro's own message), then acts as the scripted agent."""
-    kiro = tmp_path / "kiro-cli"
-    kiro.write_text(f"""#!/bin/sh
+    if os.name == "nt":  # a .cmd, as npm installs CLIs there: started through PATHEXT and cmd.exe
+        kiro = tmp_path / "kiro-cli.cmd"
+        kiro.write_text(f"""@echo off\r
+if "%1"=="login" (type nul > "{tmp_path}\\logged" & exit /b 0)\r
+if not exist "{tmp_path}\\logged" (echo error: You are not logged in, please log in with kiro-cli login 1>&2 & exit /b 1)\r
+"{sys.executable}" "{FAKE[1]}"\r
+""")
+    else:
+        kiro = tmp_path / "kiro-cli"
+        kiro.write_text(f"""#!/bin/sh
 if [ "$1" = login ]; then touch {tmp_path}/logged; exit 0; fi
 [ -f {tmp_path}/logged ] || {{ echo 'error: You are not logged in, please log in with kiro-cli login' >&2; exit 1; }}
 exec {sys.executable} {FAKE[1]}
 """)
     kiro.chmod(0o755)
     try:
-        subprocess.run([str(kiro), "--version"], capture_output=True, timeout=10)
+        subprocess.run([str(kiro), "--version"], capture_output=True, timeout=10, shell=os.name == "nt")
     except PermissionError:
         pytest.skip("the temp directory is mounted noexec here (use --basetemp elsewhere)")
     monkeypatch.setattr(cli, "interactive", lambda: True)

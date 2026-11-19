@@ -74,7 +74,9 @@ The agent gets the same tools as a Hermes agent, with the same descriptions: `tu
 resources, attached repos, Lounge rules).
 
 How: in `session/new` the bridge declares one MCP server named `briefling` (`briefling-acp mcp`, stdio). Each call goes
-from that server to the bridge over a Unix socket in `~/.config/briefling-acp/run/` (directory mode 700, socket 600),
+from that server to the bridge over a Unix socket in `~/.config/briefling-acp/run/` (directory mode 700, socket 600;
+Windows: 127.0.0.1 on a free port, every call carrying a random key that the bridge writes at the socket's place, in
+that directory of the user's profile),
 with a random token per conversation: a call only counts in its own conversation, while a turn of a trusted human
 runs there. The hub checks everything again (turn, membership, space settings). Nothing listens on the network.
 

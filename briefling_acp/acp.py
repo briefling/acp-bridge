@@ -13,6 +13,8 @@ by its own configuration (Kiro: the agent config's allowed tools), never by the 
 import asyncio
 import json
 import logging
+import shutil
+import sys
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from . import __version__
@@ -22,6 +24,19 @@ logger = logging.getLogger(__name__)
 PROTOCOL_VERSION = 1
 LINE_LIMIT = 16 * 1024 * 1024  # one JSON-RPC message per line; tool outputs can be large
 STDERR_KEEP = 4000
+
+
+WINDOWS = sys.platform == "win32"
+
+
+def resolve(command: List[str]) -> List[str]:
+    """Windows: the program's full path through PATH and PATHEXT (`npx` is `npx.cmd`, `claude` often `claude.cmd`),
+    which CreateProcess does not look up by itself; it then runs a .cmd/.bat through cmd.exe. Elsewhere: unchanged
+    (exec searches PATH). Not found: unchanged, so the start fails with the usual FileNotFoundError."""
+    if not WINDOWS or not command:
+        return command
+    found = shutil.which(command[0])
+    return [found, *command[1:]] if found else command
 
 
 class AcpError(Exception):
@@ -72,7 +87,7 @@ class AcpAgent:
                 return
             self._fail_pending("the agent process restarted")
             self.proc = await asyncio.create_subprocess_exec(
-                *self.command, cwd=self.cwd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                *resolve(self.command), cwd=self.cwd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, limit=LINE_LIMIT)
             self.stderr_tail = ""
             self._reader = asyncio.create_task(self._read(self.proc))
@@ -88,7 +103,18 @@ class AcpAgent:
 
     async def stop(self) -> None:
         if self.proc and self.proc.returncode is None:
-            self.proc.terminate()
+            if WINDOWS:  # a .cmd runs the agent under cmd.exe: terminating cmd.exe alone would leave the agent running
+                try:
+                    k = await asyncio.create_subprocess_exec("taskkill", "/pid", str(self.proc.pid), "/T", "/F",
+                                                             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    await asyncio.wait_for(k.wait(), 10)
+                except (OSError, asyncio.TimeoutError):
+                    pass
+            if self.proc.returncode is None:
+                try:
+                    self.proc.terminate()
+                except ProcessLookupError:
+                    pass
             try:
                 await asyncio.wait_for(self.proc.wait(), 5)
             except asyncio.TimeoutError:

@@ -45,8 +45,62 @@ async def test_session_new_declares_the_mcp_server_with_its_own_token(env):
     await hub.collect_turn("t2")
     assert len(set(bridge.thread_token.values())) == 2, "one token per conversation"
     st = os.stat(bridge.socket_path)
-    assert stat.S_ISSOCK(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
-    assert stat.S_IMODE(os.stat(os.path.dirname(bridge.socket_path)).st_mode) == 0o700
+    if not bridge.mcp_tcp:
+        assert stat.S_ISSOCK(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(os.stat(os.path.dirname(bridge.socket_path)).st_mode) == 0o700
+
+
+@pytest.fixture
+async def tcp(tmp_path):
+    """The Windows channel (loopback TCP + key), forced on any OS."""
+    from test_bridge import running
+    async with running(tmp_path, mcp_tcp=True) as hb:
+        yield hb
+
+
+async def test_tcp_channel_carries_the_tools_and_needs_the_key(tcp):
+    hub, bridge = tcp
+    with open(bridge.socket_path) as f:
+        ep = json.load(f)
+    assert set(ep) == {"port", "key"} and ep["key"] == bridge.socket_key and len(ep["key"]) >= 40
+    if os.name != "nt":
+        assert stat.S_IMODE(os.stat(bridge.socket_path).st_mode) == 0o600
+        assert stat.S_IMODE(os.stat(os.path.dirname(bridge.socket_path)).st_mode) == 0o700
+    # The real path: the agent starts `briefling-acp mcp`, which reads the endpoint file and calls with the key.
+    await hub.push(deliver("t1", 'TOOL LIST\nTOOL turn_outcome {"outcome": "done"}'))
+    f = await answer(hub, "thread.outcome", lambda f: {"type": "ack", "client_id": f["client_id"]})
+    assert f["thread"] == "t1" and f["outcome"] == "done"
+    text = finals(await hub.collect_turn("t1"))[-1]["text"]
+    res, err = tool_result(text, "turn_outcome")
+    assert "tools: " + ",".join(tools.NAMES) in text and res["ok"] is True and not err
+
+    async def raw(line: bytes) -> dict:
+        r, w = await asyncio.open_connection("127.0.0.1", ep["port"])
+        w.write(line)
+        await w.drain()
+        out = json.loads(await r.readline())
+        w.close()
+        return out
+    # Any local process can open the port: without the key, even a valid token gets nothing.
+    await hub.push(deliver("t2", "SLOW", mid="m2"))
+    await hub.next(lambda f: f["type"] == "message.final")
+    tok = bridge.thread_token["t2"]
+    for key in (None, "", "forged"):
+        req = {"token": tok, "tool": "memory_search", "args": {"query": ""}, **({} if key is None else {"key": key})}
+        assert (await raw((json.dumps(req) + "\n").encode()))["error"] == "forbidden"
+    assert (await raw(b"not json\n"))["error"] == "bad_request"
+    pending = asyncio.create_task(asyncio.to_thread(mcp.call_bridge, bridge.socket_path, tok, "memory_search", {"query": ""}))
+    f = await answer(hub, "memory.search", lambda f: {"type": "memory.result", "client_id": f["client_id"], "entries": []})
+    assert f["thread"] == "t2" and (await pending)["ok"] is True
+    await hub.push({"type": "turn.stop", "thread": "t2", "by": "sub-trusted"})
+    await hub.collect_turn("t2")
+
+
+def test_mcp_relay_says_unreachable_on_a_broken_endpoint_file(tmp_path):
+    p = tmp_path / "bridge.env.sock"
+    p.write_text("{}")
+    assert mcp.call_bridge(str(p), "t", "memory_search", {})["error"] == "bridge_unreachable"
 
 
 async def test_agent_lists_the_tools_and_ends_its_turn_with_done(env):

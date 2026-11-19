@@ -5,7 +5,8 @@ that conversation's token in its environment), or, when the agent ignores the se
 declares it once in the agent's own config (no token: the bridge then ties each call to the only turn running).
 
 It only relays: each `tools/call` goes to the bridge over its Unix socket (in a directory only this user can open) as
-one JSON line {token, tool, args}; the bridge checks the token, the running turn and the arguments, sends the frame to
+one JSON line {token, tool, args}; on Windows the socket's path holds instead an endpoint file {port, key} (same
+private directory): the line goes to 127.0.0.1:port and carries the key; the bridge checks the token, the running turn and the arguments, sends the frame to
 the hub and answers with the tool result. Standard library only, no MCP SDK: the server needs `initialize`,
 `tools/list`, `tools/call` and `ping`, newline-delimited JSON-RPC 2.0 like ACP.
 """
@@ -25,11 +26,18 @@ SOCKET_ENV, TOKEN_ENV = "BRIEFLING_ACP_SOCKET", "BRIEFLING_ACP_TOKEN"
 
 def call_bridge(path: str, token: str, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """One tool call to the bridge: {ok, ...} as the bridge returns it, or a local failure."""
+    req: Dict[str, Any] = {"token": token, "tool": tool, "args": args}
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        if os.path.isfile(path):  # the bridge's TCP endpoint (Windows): a Unix socket is not a regular file
+            with open(path) as f:
+                ep = json.load(f)
+            family, addr, req["key"] = socket.AF_INET, ("127.0.0.1", int(ep["port"])), str(ep["key"])
+        else:
+            family, addr = socket.AF_UNIX, path
+        with socket.socket(family, socket.SOCK_STREAM) as s:
             s.settimeout(CALL_TIMEOUT_S)
-            s.connect(path)
-            s.sendall((json.dumps({"token": token, "tool": tool, "args": args}) + "\n").encode())
+            s.connect(addr)
+            s.sendall((json.dumps(req) + "\n").encode())
             buf = b""
             while not buf.endswith(b"\n"):
                 chunk = s.recv(65536)
@@ -38,7 +46,7 @@ def call_bridge(path: str, token: str, tool: str, args: Dict[str, Any]) -> Dict[
                 buf += chunk
         res = json.loads(buf)
         return res if isinstance(res, dict) else {"ok": False, "error": "bridge_error", "detail": "unexpected answer"}
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:  # AttributeError: no AF_UNIX (Windows)
         return {"ok": False, "error": "bridge_unreachable",
                 "detail": f"the briefling bridge is not reachable ({type(e).__name__}): is `briefling-acp` running?"}
 

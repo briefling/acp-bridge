@@ -27,6 +27,7 @@ import sys
 from typing import Dict, List, Optional
 
 from . import join
+from .acp import resolve
 
 DEFAULT_ENV = os.path.join(os.path.expanduser("~"), ".config", "briefling-acp", "bridge.env")
 DEFAULT_COMMAND = ["kiro-cli", "acp"]
@@ -132,7 +133,7 @@ def do_run(env: str, command: List[str], cwd: str, mcp_port: Optional[int] = Non
             if (attempt == 1 and KIRO_LOGIN_HINT in bridge.agent.stderr_tail
                     and os.path.basename(command[0]).startswith("kiro-cli") and interactive()):
                 print("Kiro is not logged in: starting `kiro-cli login`...", file=sys.stderr)
-                if subprocess.run([command[0], "login"]).returncode == 0:
+                if subprocess.run(resolve([command[0], "login"])).returncode == 0:
                     continue
             return 1
     return 1

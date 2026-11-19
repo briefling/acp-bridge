@@ -3,6 +3,7 @@ fake hub (report at subscribe, release frame, wait for no turn, restart)."""
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -77,7 +78,8 @@ def test_failed_install_puts_the_previous_commit_back_and_is_never_retried(tmp_p
     assert selfupdate.apply(git_install(), REL, "0.0.1", state, run=run) is False
     assert run.installs() == [NEW, OLD], "rolled back to the commit it ran"
     assert selfupdate.read_state(state) == {"version": "9.0.0", "commit": NEW}
-    assert oct((tmp_path / "u.json").stat().st_mode & 0o777) == "0o600"
+    if os.name != "nt":  # no mode bits on Windows (the profile's ACL)
+        assert oct((tmp_path / "u.json").stat().st_mode & 0o777) == "0o600"
     again = Script()
     assert selfupdate.apply(git_install(), REL, "0.0.1", state, run=again) is False and again.installs() == []
     assert selfupdate.blocked(git_install(), True, "0.0.1", selfupdate.read_state(state)) == "failed"
