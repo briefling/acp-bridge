@@ -39,7 +39,7 @@ from aiohttp import web
 
 from . import tools as tl
 from .acp import AcpAgent, AcpError
-from .join import PROTOCOL, PROTOCOL_VERSION
+from .join import PROTOCOL, PROTOCOL_VERSION, proxy_for
 from . import __version__, mcp_http, selfupdate
 from .mcp import SOCKET_ENV, TOKEN_ENV
 from .tooldefs import HUB_UNREACHABLE, NO_TEXT, with_context
@@ -276,7 +276,7 @@ class Bridge:
             return self.token
         basic = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
         async with self.session.post(self.token_url, data={"grant_type": "client_credentials", "scope": SCOPE},
-                                     headers={"Authorization": f"Basic {basic}"},
+                                     headers={"Authorization": f"Basic {basic}"}, proxy=proxy_for(self.token_url),
                                      timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status != 200:
                 raise RuntimeError(f"token endpoint HTTP {r.status}")  # body may echo the request: not logged
@@ -321,6 +321,7 @@ class Bridge:
                 try:
                     token = await self.access_token()
                     self.ws = await self.session.ws_connect(self.ws_url, protocols=(PROTOCOL, token), heartbeat=None,
+                                                            proxy=proxy_for(self.ws_url),
                                                             timeout=aiohttp.ClientWSTimeout(ws_close=10))
                     if self.ws.protocol != PROTOCOL:
                         raise RuntimeError(f"hub did not accept the {PROTOCOL} subprotocol")

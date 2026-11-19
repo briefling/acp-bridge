@@ -16,7 +16,8 @@ import re
 import secrets
 import sys
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+import urllib.request
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 import aiohttp
 
@@ -36,6 +37,29 @@ HUB_ERRORS = {
     "agent_exists": "this agent is already connected to briefling by another instance: ask the admin",
     "forbidden": "the hub refused this code: ask the admin for a new link",
 }
+
+
+def proxy_for(url: str) -> Optional[str]:
+    """The proxy of this machine for `url`, or None (direct). Behind a corporate proxy the machine's DNS often knows
+    only internal names: a direct connection then fails on DNS (Julien, Nov 2026). The standard library's lookup:
+    HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and NO_PROXY first; without them the system settings (Windows: Internet Options,
+    with their bypass list; macOS: System Settings). wss:// takes the https proxy and ws:// the http one (aiohttp's
+    trust_env would look for a WSS_PROXY nobody sets). Loopback is never proxied (local server, tests)."""
+    u = urlsplit(url)
+    host = (u.hostname or "").lower()
+    if not host or host in LOCAL_HOSTS or host == "::1" or host.endswith(".localhost"):
+        return None
+    try:
+        proxies = urllib.request.getproxies()
+        if not proxies or urllib.request.proxy_bypass(host):
+            return None
+    except Exception:  # a malformed system setting never stops the connection: direct, as before
+        return None
+    scheme = {"wss": "https", "ws": "http"}.get(u.scheme, u.scheme)
+    p = proxies.get(scheme) or proxies.get("all")
+    if p and "://" not in p:  # the Windows settings may give host:port only
+        p = "http://" + p
+    return p or None
 
 
 class JoinError(Exception):
@@ -79,7 +103,7 @@ async def redeem(app: str, code: str, timeout: float = TIMEOUT_S) -> Tuple[str, 
     """Return (wsUrl, agent.joined frame). Raises JoinError on any refusal; the socket is always closed."""
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
         try:
-            async with session.get(f"{app}/config.json") as r:
+            async with session.get(f"{app}/config.json", proxy=proxy_for(app)) as r:
                 if r.status != 200:
                     raise JoinError(f"cannot read {app}/config.json (HTTP {r.status})")
                 config = await r.json(content_type=None)
@@ -91,7 +115,8 @@ async def redeem(app: str, code: str, timeout: float = TIMEOUT_S) -> Tuple[str, 
         _check_url(ws_url, ("wss", "ws"))
 
         try:
-            ws = await session.ws_connect(ws_url, protocols=(PROTOCOL, f"join.{code}"), heartbeat=None)
+            ws = await session.ws_connect(ws_url, protocols=(PROTOCOL, f"join.{code}"), heartbeat=None,
+                                          proxy=proxy_for(ws_url))
         except aiohttp.WSServerHandshakeError as e:
             if e.status in (401, 403):
                 raise JoinError("invalid code: check the link, or ask the admin for a new one") from None

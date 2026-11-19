@@ -31,6 +31,10 @@ agent), `--force` (join again), `-- <command>` for another agent or Kiro options
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
 pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.42"`.
 
+**Behind a proxy**: the bridge's connections to the hub (invitation, token, WebSocket) use the machine's proxy:
+`HTTPS_PROXY` (also for `wss://`), `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; without them, the system settings
+(Windows Internet Options, macOS System Settings). 127.0.0.1 and localhost never go through the proxy.
+
 **Updates**: the bridge updates itself. At each connection (and right after the hub is deployed) the hub announces
 the bridge release it ships; when it is newer, the bridge checks that the public tag `v<version>` is that very commit,
 installs it with the installer that installed it (pipx, a venv's pip, `uv tool install` or a uv venv), checks the new
