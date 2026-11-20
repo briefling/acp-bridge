@@ -272,7 +272,7 @@ def test_mcp_server_speaks_initialize_list_and_refuses_the_rest():
 
 def test_mcp_stdio_is_utf8_whatever_the_console_code_page(tmp_path):
     """`briefling-acp mcp` as the agent starts it, with Windows' console default (cp1252) forced: an accented argument
-    reaches the bridge intact (it read « Ã » on Julien's machine) and the answer goes back as UTF-8."""
+    reaches the bridge intact (it read « Ã » on a real Windows machine) and the answer goes back as UTF-8."""
     import socket as so
     import subprocess
     import threading
@@ -353,6 +353,16 @@ def test_memory_propose_takes_replaces_like_the_plugin():
     assert "replaces" not in tools.BUILD["memory_propose"](base)[0]
     for bad in ("j1", ["j1", "j1"], ["a b"], [f"x{i}" for i in range(6)]):
         assert tools.BUILD["memory_propose"]({**base, "replaces": bad})[0] is None, bad
+
+
+def test_memory_propose_needs_a_title_for_a_rule_like_the_plugin():
+    base = {"text": "x", "kind": "rule", "sources": ["s"], "tags": ["hub"]}
+    ok, err = tools.BUILD["memory_propose"]({**base, "title": " Deploy  guard "})
+    assert not err and ok["title"] == "Deploy guard"
+    for bad in (None, "", "x" * 81):
+        assert tools.BUILD["memory_propose"]({**base, "title": bad})[0] is None, bad
+    assert "title" not in tools.BUILD["memory_propose"]({**base, "kind": "fact"})[0]
+    assert "title_required" in tools.td.MEMORY_ERRORS
 
 
 def test_memory_propose_takes_tags_like_the_plugin():

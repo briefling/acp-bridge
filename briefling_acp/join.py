@@ -41,7 +41,7 @@ HUB_ERRORS = {
 
 def proxy_for(url: str) -> Optional[str]:
     """The proxy of this machine for `url`, or None (direct). Behind a corporate proxy the machine's DNS often knows
-    only internal names: a direct connection then fails on DNS (Julien, Nov 2026). The standard library's lookup:
+    only internal names: a direct connection then fails on DNS (seen on a company network). The standard library's lookup:
     HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and NO_PROXY first; without them the system settings (Windows: Internet Options,
     with their bypass list; macOS: System Settings). wss:// takes the https proxy and ws:// the http one (aiohttp's
     trust_env would look for a WSS_PROXY nobody sets). Loopback is never proxied (local server, tests)."""

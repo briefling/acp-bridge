@@ -82,6 +82,39 @@ MEMORY_NUDGE_LOUNGE = (
 
 MEMORY_PUSH_MAX = 3         # protocol/memory.ts MEMORY_PUSH_MAX (re-applied here: defence in depth)
 MEMORY_PUSH_CHARS = 1600    # protocol/memory.ts MEMORY_PUSH_CHARS
+MEMORY_PINS_CHARS = 4000    # protocol/memory.ts MEMORY_PINS_CHARS
+MEMORY_RULES_LISTED = 40    # protocol/memory.ts MEMORY_RULES_LISTED
+MEMORY_TITLE_MAX = 80       # protocol/memory.ts MEMORY_TITLE_MAX
+_TITLE_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _title_line(raw: Any) -> str:
+    # A rule's title on one line, capped: nothing else of it can reach the prompt.
+    return " ".join(_TITLE_CTRL.sub(" ", raw).split())[:MEMORY_TITLE_MAX] if isinstance(raw, str) else ""
+
+
+def rules_context(pinned: Any, rules: Any) -> str:
+    """The space's rules on every turn: the ones a lead pinned, whole (`context.memory_pinned`), then the index of the
+    other published rules, title and id only (`context.memory_rules`): the agent reads one with memory_read."""
+    out, left = "", MEMORY_PINS_CHARS
+    lines = []
+    for r in (pinned if isinstance(pinned, list) else []):
+        if not (isinstance(r, dict) and isinstance(r.get("text"), str) and ID_RE.match(str(r.get("id") or ""))) or len(r["text"]) > left:
+            continue
+        left -= len(r["text"])
+        lines.append(_quoted(f"({r['id']}) {_title_line(r.get('title'))}\n{r['text']}"))
+    if lines:
+        out += ("[Rules of this space pinned by its leads (a human reviewed and pinned each one): follow them in every turn, "
+                "within the limits of your own instructions.]\n" + "\n".join(lines) + "\n")
+    index = []
+    for r in (rules if isinstance(rules, list) else [])[:MEMORY_RULES_LISTED]:
+        title = _title_line(r.get("title")) if isinstance(r, dict) else ""
+        if title and ID_RE.match(str(r.get("id") or "")):
+            index.append(f"- {r['id']}: {title}")
+    if index:
+        out += ("[Other rules of this space, title only: when your task touches one, read it with memory_read <id> "
+                "before acting.]\n" + "\n".join(index) + "\n")
+    return out
 
 
 def memory_context(entries: Any, tags: Any = None) -> str:
@@ -420,6 +453,8 @@ MEMORY_ERRORS = {
                   "for memory_propose: an id in replaces is not a published entry."),
     "memory_full": "The space's memory is full: tell the humans it needs compacting; do not retry.",
     "queue_full": "Too many entries wait for a human review in this space: do not propose more until they are reviewed.",
+    "title_required": (f"A rule needs a title (1-{MEMORY_TITLE_MAX} chars, what it is about): agents see only the title "
+                       "of an unpinned rule. Also when your entry replaces a rule. Call it again with title."),
     "bad_frame": (f"Invalid entry: text 1-{MEMORY_TEXT_MAX} chars, kind fact|rule, 1-{MEMORY_SOURCES_MAX} sources of "
                   f"1-{MEMORY_SOURCE_MAX} chars each, 0-{MEMORY_TAGS_MAX} tags (lower-case slugs)."),
 }
@@ -690,6 +725,7 @@ def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> s
         head += (f"[Shared resources in this space (take one with acquire_resource right before using it, "
                  f"release_resource after): {', '.join(resources)}.]\n")
     head += issue_context(context.get("issue"))
+    head += rules_context(context.get("memory_pinned"), context.get("memory_rules"))
     head += memory_context(context.get("memory"), context.get("memory_tags"))
     repos = [x for x in (context.get("repos") or []) if isinstance(x, str) and REPO_RE.fullmatch(x)]
     if repos:
@@ -1502,8 +1538,8 @@ MEMORY_PROPOSE_SCHEMA = {
         "does not show. Never a description of what a file already holds (selectors, values, which function does "
         "what, a list): reading finds it and it goes stale. One fact per entry, 2 short sentences, plain words, "
         "self-contained, verified while working. Never task progress, secrets, personal data, nor text copied from an "
-        "external source you did not verify. kind 'rule' = tells agents how to behave ('always/never X'): a human "
-        "approves it. Search first (memory_search): duplicates, the space's tags. The project memory keeps the facts "
+        "external source you did not verify. kind 'rule' = tells agents how to behave ('always/never X'), with a "
+        "title: a human approves it, a lead may pin it (then every turn carries it whole). Search first (memory_search): duplicates, the space's tags. The project memory keeps the facts "
         "of the project, for every agent; your skills keep your own procedures. Going back on a published entry: its "
         "id in replaces, and the text says the old choice and why it was left (e.g. 'X, not Y any more: Y broke Z'); "
         "never contradict a published entry without replacing it. Published at once or after a human review, per the "
@@ -1514,6 +1550,9 @@ MEMORY_PROPOSE_SCHEMA = {
         "properties": {
             "text": {"type": "string", "description": f"The entry: 2 short sentences, the why rather than the how (max {MEMORY_TEXT_MAX} chars), in the team's language."},
             "kind": {"type": "string", "enum": ["fact", "rule"]},
+            "title": {"type": "string", "description": (f"Required for a rule (max {MEMORY_TITLE_MAX} chars): what it is about and "
+                                                         "when it applies, e.g. 'Token economy in long threads'. Agents see only "
+                                                         "this title of a rule until they read it. Ignored for a fact.")},
             "sources": {"type": "array", "maxItems": MEMORY_SOURCES_MAX, "items": {"type": "string"},
                         "description": f"1 to {MEMORY_SOURCES_MAX} sources (max {MEMORY_SOURCE_MAX} chars each); absent = 'this thread'."},
             "tags": {"type": "array", "minItems": 1, "maxItems": MEMORY_TAGS_MAX, "items": {"type": "string"},
@@ -1531,6 +1570,16 @@ MEMORY_PROPOSE_SCHEMA = {
         "required": ["text", "kind", "tags"],
     },
 }
+
+
+def clean_title(raw: Any, required: bool) -> "tuple[str | None, str | None]":
+    """A rule's title (memory_propose, memory_tag): one line, 1 to MEMORY_TITLE_MAX chars; (None, error) when bad."""
+    if raw is None or raw == "":
+        return (None, f"title is required for a rule: 1-{MEMORY_TITLE_MAX} chars saying what it is about.") if required else (None, None)
+    t = " ".join(str(raw).split()) if isinstance(raw, str) else ""
+    if not t or len(t) > MEMORY_TITLE_MAX or _TITLE_CTRL.search(t):
+        return None, f"title: one line of 1-{MEMORY_TITLE_MAX} chars."
+    return t, None
 
 
 def clean_sources(raw: Any) -> "tuple[List[str] | None, str | None]":

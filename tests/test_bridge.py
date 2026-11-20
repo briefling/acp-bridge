@@ -214,6 +214,9 @@ def test_prompt_text_gives_the_plugin_context():
     assert t.startswith('[briefling Lounge topic "Port Kiro", message from Ada]\n[Space: Project X]\n')
     assert "acquire_resource" in t and "acme/app" in t and "propose_thread tool" in t
     assert "- stack:dev: Take before cdk deploy, release after." in t, "the admin's rule reaches ACP agents too"
+    rules = prompt_text({**f, "context": {**f["context"], "memory_pinned": [{"id": "r1", "title": "Token economy", "text": "Read by range."}],
+                                          "memory_rules": [{"id": "r2", "title": "Deploy guard"}]}})
+    assert "> (r1) Token economy\n> Read by range." in rules and "- r2: Deploy guard" in rules, "pinned rules and the rule index reach ACP agents too"
     assert t.endswith("\ngo")
     # the space's « threads » module off: no thread card to propose, the ACP agent is told so too
     off = prompt_text({**f, "context": {**f["context"], "threads": False}})
