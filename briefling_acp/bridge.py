@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Set
 import aiohttp
 from aiohttp import web
 
+from . import attachments as att
 from . import tools as tl
 from .acp import AcpAgent, AcpError
 from .join import PROTOCOL, PROTOCOL_VERSION, proxy_for
@@ -92,18 +93,35 @@ def new_id() -> str:
     return out + secrets.token_hex(6)
 
 
-def prompt_text(frame: Dict[str, Any]) -> str:
-    """What the agent receives: one line (where, who), then the same context as a Hermes agent (space description,
-    resources, repos, Lounge rules, unseen messages quoted as data: the plugin's `with_context`), then the text."""
+def frame_files(frame: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The attachments of a deliver: `files` (the message's and those of the unseen messages, with a read URL and
+    `by`), else the message's own (an older hub: listed, read with attachment_get)."""
+    msg = frame.get("message") or {}
+    files = frame.get("files") if isinstance(frame.get("files"), list) else msg.get("files")
+    return [f for f in (files or []) if isinstance(f, dict) and isinstance(f.get("id"), str)]
+
+
+def poster_names(frame: Dict[str, Any]) -> Dict[str, str]:
+    """Who posted a file, as the listing says it: the message's author by name, this agent as « you »."""
+    msg = frame.get("message") or {}
+    out = {str(frame.get("agent") or ""): "you"}
+    author = str((msg.get("author") or {}).get("id") or "")
+    if author:
+        out[author] = str(frame.get("author_name") or "the author of the message")
+    return out
+
+
+def prompt_text(frame: Dict[str, Any], sent: Optional[Set[str]] = None) -> str:
+    """What the agent receives: one line (where, who), the list of attachments (`sent`: ids whose content comes with
+    the prompt), then the same context as a Hermes agent (space description, resources, repos, Lounge rules, unseen
+    messages quoted as data: the plugin's `with_context`), then the text."""
     ctx = frame.get("context") if isinstance(frame.get("context"), dict) else {}
     msg = frame.get("message") or {}
     kind = "Lounge topic" if ctx.get("kind") == "topic" else "thread"
     title = str(ctx.get("title") or "")[:200]
     who = str(frame.get("author_name") or "a human")[:100]
     head = f"[briefling {kind} \"{title}\", message from {who}]\n"
-    files = msg.get("files") or frame.get("files") or []
-    if files:
-        head += f"[{len(files)} attachment(s) not forwarded: this bridge relays text only]\n"
+    head += att.listing(frame_files(frame), sent or set(), {k: v for k, v in poster_names(frame).items() if k})
     return head + with_context(ctx, str(msg.get("text") or ""))
 
 
@@ -416,7 +434,7 @@ class Bridge:
             self.on_release(frame.get("release"))
         elif kind == "release":  # pushed by the hub right after a deploy
             self.on_release(frame.get("release"))
-        elif kind in ("ack", "resource.result", "memory.result", "introspect.result", "memory.proposed"):
+        elif kind in ("ack", "resource.result", "memory.result", "introspect.result", "memory.proposed", "files.urls"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():
                 fut.set_result(frame)
@@ -470,7 +488,10 @@ class Bridge:
             reason = "end_turn"
             try:
                 sid = await self._session_for(thread)
-                reason = await self.agent.prompt(sid, prompt_text(frame), turn.on_update, turn.on_permission)
+                files = frame_files(frame)
+                blocks, sent = await att.prompt_blocks(self.session, files, self.agent.capabilities.get("promptCapabilities") or {},
+                                                       self.ws_url, proxy_for) if files else ([], set())
+                reason = await self.agent.prompt(sid, prompt_text(frame, sent), turn.on_update, turn.on_permission, blocks)
             except (AcpError, OSError) as e:
                 logger.warning("turn failed in %s: %s", thread, e)
                 if self.agent.stderr_tail:
@@ -685,7 +706,20 @@ class Bridge:
             return tl.refused(tool, e.code)
         except (ConnectionError, asyncio.TimeoutError):
             return dict(HUB_UNREACHABLE)
+        if tool == "attachment_get":
+            return await self._attachment(frame["ids"][0], answer)
         return tl.result(tool, frame, answer)
+
+    async def _attachment(self, fid: str, answer: Dict[str, Any]) -> Dict[str, Any]:
+        """attachment_get, once the hub gave (or not) a fresh URL: the bridge downloads it (attachments.read_one)."""
+        urls = answer.get("urls") if isinstance(answer.get("urls"), dict) else {}
+        refs = [f for f in (answer.get("files") or []) if isinstance(f, dict) and f.get("id") == fid]
+        url = urls.get(fid)
+        if not refs or not att.url_ok(url, self.ws_url) or self.session is None:
+            return {"ok": False, "error": "not_found", "detail": (
+                "No such attachment that you may read: check the id in the list at the top of the message "
+                "(only attachments of the spaces you serve, whose member is the human of this turn).")}
+        return await att.read_one(self.session, refs[0], url, proxy_for(url))
 
     async def request(self, frame: Dict[str, Any], timeout: float = REQUEST_TIMEOUT_S) -> Dict[str, Any]:
         """Send a frame with a fresh client_id and wait for the hub's answer (or its `error` with that ref)."""

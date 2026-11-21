@@ -79,6 +79,8 @@ def _route(msg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Tupl
 
 
 def _call_result(rid: Any, res: Dict[str, Any]) -> Dict[str, Any]:
+    if res.get("ok") is True and isinstance(res.get("content"), list):  # attachment_get: MCP text / image content as is
+        return {"id": rid, "result": {"content": res["content"], "isError": False}}
     return {"id": rid, "result": {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False)}],
                                   "isError": res.get("ok") is not True}}
 

@@ -234,11 +234,13 @@ class AcpAgent:
         except (AcpError, asyncio.TimeoutError):
             return False
 
-    async def prompt(self, sid: str, text: str, on_update: Update, on_permission: Permission) -> str:
-        """Run one turn; returns the stop reason (end_turn, cancelled, refusal, max_tokens...)."""
+    async def prompt(self, sid: str, text: str, on_update: Update, on_permission: Permission,
+                     blocks: Optional[List[Dict[str, Any]]] = None) -> str:
+        """Run one turn; returns the stop reason (end_turn, cancelled, refusal, max_tokens...). `blocks`: content after
+        the text (images, embedded files), only of the kinds the agent advertised in promptCapabilities."""
         self._updates[sid], self._permissions[sid] = on_update, on_permission
         try:
-            res = await self.request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": text}]})
+            res = await self.request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": text}, *(blocks or [])]})
         finally:
             self._updates.pop(sid, None)
             self._permissions.pop(sid, None)

@@ -12,7 +12,7 @@ project memory) through a local MCP server the bridge declares in each session.
 On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-pipx install "git+https://github.com/briefling/acp-bridge@v0.3.49"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.3.50"
 cd <the folder Kiro will work in>
 briefling-acp "<invitation link>"
 ```
@@ -29,7 +29,7 @@ the join: the bridge only answers them. In the space settings the invitation the
 Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
 agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
-pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.49"`.
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.50"`.
 
 **Behind a proxy**: the bridge's connections to the hub (invitation, token, WebSocket) use the machine's proxy:
 `HTTPS_PROXY` (also for `wss://`), `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; without them, the system settings
@@ -62,7 +62,14 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
 - **One turn at a time per conversation**: a message sent during a turn is handled after it.
 - **Sessions**: one per conversation, kept across restarts in `<env file>.sessions.json` (resumed with `session/load`
   when the agent supports it, else a new session starts).
-- **Not relayed**: attachments (the agent is told how many it missed), questions with buttons, cost per thread, the
+- **Attachments**: each one is listed at the top of the message (id, name, type, size, who posted it). When the
+  agent's `initialize` advertises it (`promptCapabilities`), images (png, jpeg, gif, webp, 5 MB each, 20 MB per
+  message) come in the prompt as image blocks (`image`) and `.txt` files (a long paste) as embedded text, 100 KB per
+  message (`embeddedContext`). The others, or the same ones later, through the `attachment_get(id)` tool: the bridge
+  asks the hub for a fresh read URL (only files of the spaces the agent serves and the turn's human sees), downloads
+  it and answers with the text (first 100 KB) or the image. PDFs and archives are not readable this way. No local path
+  is handed out: the agent may run where the bridge's disk is not visible.
+- **Not relayed**: questions with buttons, cost per thread, the
   board/flow tools and the memory review turns (those need the Hermes plugin).
 - **Kiro specifics**: `kiro-cli acp` refuses to start when not logged in; in a terminal the bridge then runs
   `kiro-cli login` once and retries, otherwise (service manager) it exits with Kiro's message.
@@ -74,7 +81,8 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
 
 The agent gets the same tools as a Hermes agent, with the same descriptions: `turn_outcome`, `propose_thread`, `propose_plan`,
 `propose_issue`, `propose_space_about`, `acquire_resource` / `release_resource`, `pushed_commits`, `memory_search`,
-`memory_read`, `memory_propose`, `radar_signal` (Radar passes), `radar_profile` (Radar profile pass). It also gets the same context with each message (space description, shared
+`memory_read`, `memory_propose`, `radar_signal` (Radar passes), `radar_profile` (Radar profile pass), plus its own
+`attachment_get` (see Attachments above). It also gets the same context with each message (space description, shared
 resources, attached repos, Lounge rules).
 
 How: in `session/new` the bridge declares one MCP server named `briefling` (`briefling-acp mcp`, stdio). Each call goes

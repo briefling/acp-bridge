@@ -1,7 +1,8 @@
 """A scripted ACP agent for the tests (newline-delimited JSON-RPC on stdio). Behaviour by keyword in the prompt:
 PERMISSION (asks a permission, reports the answer), SLOW (waits for session/cancel), FS (asks the client to read a
 file, reports the error code), DIE (exits mid-turn), WAIT (1.5 s after its tool call), PERMTOOL (asks a permission for
-a briefling tool), MCP (reports the MCP servers it got in session/new), lines `SAY <text>` and `TOOL <name> <json args>`
+a briefling tool), MCP (reports the MCP servers it got in session/new), BLOCKS (reports the attachment list and the
+prompt's blocks after the text; FAKE_PROMPT_CAPS = the promptCapabilities it advertises), lines `SAY <text>` and `TOOL <name> <json args>`
 (says the text, or calls the tool through the MCP server of session/new, like a real agent, and reports the result);
 otherwise echoes the prompt's last line in three chunks."""
 
@@ -83,6 +84,10 @@ def tool_lines(sid, text):
                 r = mcp_rpc(sid, "tools/call", {"name": name, "arguments": json.loads(raw or "{}")})
                 res = r.get("result") or {}
                 chunk(sid, f"{name} -> {res.get('content', [{}])[0].get('text')} error={res.get('isError')}\n")
+                more = [{"type": c.get("type"), "mimeType": c.get("mimeType"), "n": len(c.get("data") or "")}
+                        for c in res.get("content", [])[1:]]
+                if more:  # MCP content after the first block (attachment_get's image)
+                    chunk(sid, f"{name} blocks: {json.dumps(more)}\n")
             did = True
     return did
 
@@ -151,6 +156,14 @@ def prompt(rid, p):
                                           for s in mcp_conf.get(sid, [])]))
         send({"id": rid, "result": {"stopReason": "end_turn"}})
         return
+    if "BLOCKS" in text:  # what came with the prompt: the attachment list, then each block after the text
+        listed = [l for l in text.splitlines() if l.startswith("- id ")]
+        blocks = [{"type": b.get("type"), "mimeType": b.get("mimeType") or (b.get("resource") or {}).get("mimeType"),
+                   "n": len(b.get("data") or ""), "uri": (b.get("resource") or {}).get("uri"),
+                   "text": (b.get("resource") or {}).get("text")} for b in p["prompt"][1:]]
+        chunk(sid, "blocks: " + json.dumps({"listed": listed, "blocks": blocks}))
+        send({"id": rid, "result": {"stopReason": "end_turn"}})
+        return
     if "PERMTOOL" in text:
         r = ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": "c2", "title": "@briefling/turn_outcome"},
                                                "options": [{"optionId": "no", "name": "Deny", "kind": "reject_once"}]})
@@ -180,7 +193,10 @@ def main():
         if m is None:
             replies[rid] = msg
         elif m == "initialize":
-            send({"id": rid, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, **({"mcpCapabilities": {"http": True}} if HTTP else {})},
+            caps = {"loadSession": True, **({"mcpCapabilities": {"http": True}} if HTTP else {})}
+            if os.environ.get("FAKE_PROMPT_CAPS"):  # e.g. {"image": true, "embeddedContext": true}
+                caps["promptCapabilities"] = json.loads(os.environ["FAKE_PROMPT_CAPS"])
+            send({"id": rid, "result": {"protocolVersion": 1, "agentCapabilities": caps,
                                         "agentInfo": {"name": "fake", "version": "1"}}})
         elif m == "session/new":
             sid = f"s{len(sessions) + 1}"
