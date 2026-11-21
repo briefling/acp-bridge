@@ -158,6 +158,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--env", default=DEFAULT_ENV, help=f"credentials file (default {DEFAULT_ENV})")
     p.add_argument("--app", help="briefling app URL (only with a bare code instead of the link)")
     p.add_argument("--force", action="store_true", help="join again over an existing credentials file")
+    p.add_argument("--join-only", action="store_true",
+                   help="redeem the link, save the credentials and exit without starting the agent (install.sh, then "
+                        "a service runs the bridge)")
     p.add_argument("--mcp-port", type=port, metavar="PORT",
                    help="also serve briefling's tools over HTTP on 127.0.0.1:PORT and declare that server to agents "
                         "that take one (an agent in a microVM cannot start the local one)")
@@ -173,9 +176,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
+    if args.join_only and not args.link:
+        p.error("--join-only needs the invitation link")
     if args.link:
         rc = do_join(args.link, args.app, args.env, args.force)
-        if rc:
+        if rc or args.join_only:
             return rc
     return do_run(args.env, command, args.cwd, args.mcp_port, args.mcp_host, restart_args)
 

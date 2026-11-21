@@ -307,6 +307,22 @@ def test_one_command_joins_then_runs_and_never_prints_the_secret(tmp_path, capsy
     assert runs[-1][1] == ["kiro-cli", "acp", "--agent", "x"]
 
 
+def test_join_only_saves_the_credentials_and_starts_nothing(tmp_path, capsys, monkeypatch):
+    joined = {"agent": "claude", "spaces": ["sp"], "allowed": [TRUSTED],
+              "credentials": {"client_id": "cid", "client_secret": "s3cr3t-xyz", "token_url": "https://t/oauth2/token"}}
+
+    async def redeem(app, code, timeout):
+        return "wss://hub.example", joined
+    monkeypatch.setattr(cli.join, "redeem", redeem)
+    monkeypatch.setattr(cli, "do_run", lambda *a: pytest.fail("--join-only must not start the agent"))
+    path = tmp_path / "claude.env"
+    assert cli.main([f"https://b.example/agent.md?code={'A' * 32}", "--join-only", "--env", str(path)]) == 0
+    assert cli.read_env(str(path))["BRIEFLING_CLIENT_ID"] == "cid"
+    assert "s3cr3t" not in capsys.readouterr().out
+    with pytest.raises(SystemExit):  # without a link there is nothing to join
+        cli.main(["--join-only", "--env", str(path)])
+
+
 def test_kiro_not_logged_in_starts_kiro_login_once_then_retries(tmp_path, monkeypatch):
     """A fake `kiro-cli`: refuses `acp` until `login` ran (Kiro's own message), then acts as the scripted agent."""
     if os.name == "nt":  # a .cmd, as npm installs CLIs there: started through PATHEXT and cmd.exe
