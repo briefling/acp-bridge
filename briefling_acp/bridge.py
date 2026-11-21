@@ -157,6 +157,7 @@ class Turn:
         self.started = time.monotonic()
         self.pending_status: Optional[str] = None
         self.late: Optional[asyncio.Task] = None
+        self.after_tool = False  # a tool ran since the last text: the next chunk opens a new paragraph
 
     def reply(self) -> str:
         notes = "\n".join(f"_{t if t == TOOLS_HINT else REFUSED.format(title=t)}_" for t in self.refused)
@@ -195,10 +196,15 @@ class Turn:
         if kind == "agent_message_chunk":
             c = u.get("content") or {}
             if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str):
+                # Narration on both sides of a tool call would otherwise fuse (« …existant.Le travail avance »).
+                if self.after_tool and self.text and not self.text.endswith("\n") and not c["text"].startswith("\n"):
+                    self.text += "\n\n"
+                self.after_tool = False
                 self.text += c["text"]
                 await self.flush()
         elif kind == "tool_call":
             self.acted = True
+            self.after_tool = True
             title = str(u.get("title") or u.get("kind") or "tool")[:MAX_STATUS]
             self.tools.append(title)
             await self.status(title)

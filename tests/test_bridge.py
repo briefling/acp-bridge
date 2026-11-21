@@ -387,3 +387,33 @@ def test_agent_down_hint_only_for_kiro():
     assert "kiro-cli whoami" in bridge_mod.agent_down(["/usr/local/bin/kiro-cli", "acp"], "x")
     assert "kiro-cli whoami" in bridge_mod.agent_down(["C:\\Tools\\kiro-cli.exe", "acp"], "x")
     assert "kiro" not in bridge_mod.agent_down([], "x")
+
+
+async def test_text_after_a_tool_call_opens_a_new_paragraph():
+    sent = []
+
+    class Stub:
+        turns = {}
+
+        async def send(self, frame):
+            sent.append(frame)
+
+        def next_rev(self):
+            return len(sent)
+
+    turn = bridge_mod.Turn(Stub(), "t1")
+    turn.started -= 3600  # past the status delay: no late-status task left behind
+
+    def chunk(s):
+        return {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": s}}
+
+    for u in (chunk("Je lis le code "), chunk("existant."), {"sessionUpdate": "tool_call", "title": "Read"},
+              chunk("Le travail "), chunk("avance."), {"sessionUpdate": "tool_call", "title": "Edit"},
+              chunk("Fini.\n"), {"sessionUpdate": "tool_call", "title": "Bash"}, chunk("Tests verts.")):
+        await turn.on_update(u)
+    assert turn.text == "Je lis le code existant.\n\nLe travail avance.\n\nFini.\nTests verts."
+    fresh = bridge_mod.Turn(Stub(), "t2")
+    fresh.started -= 3600
+    await fresh.on_update({"sessionUpdate": "tool_call", "title": "Read"})
+    await fresh.on_update(chunk("Bonjour."))
+    assert fresh.text == "Bonjour."  # nothing before the tool: no leading blank paragraph
