@@ -123,6 +123,14 @@ def test_build_outcome_carries_the_checked_summary():
     assert f is None and "decision" in err
 
 
+def test_build_outcome_carries_settled_leads_on_done_only():
+    f, err = tools.build_outcome({"outcome": "done", "settled_leads": ["t7-ab", "t7-ab"]})
+    assert not err and f["settled_leads"] == ["t7-ab"]
+    assert "settled_leads" not in tools.build_outcome({"outcome": "done", "settled_leads": []})[0]
+    assert "only with 'done'" in tools.build_outcome({"outcome": "waiting", "action": "x", "settled_leads": ["a"]})[1]
+    assert "lead ids" in tools.build_outcome({"outcome": "done", "settled_leads": ["../a"]})[1]
+
+
 def test_build_outcome_carries_resume_on_waiting_only():
     f, err = tools.build_outcome({"outcome": "waiting", "action": "restart", "resume": True})
     assert not err and f["resume"] is True

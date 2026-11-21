@@ -225,6 +225,8 @@ def test_prompt_text_gives_the_plugin_context():
     assert "> Hub [t9]: a human's turn; last outcome done\n>   status: Shipped." in prompt_text(f), "threads opened from the topic reach ACP agents"
     f["context"]["leads"] = [{"from": "t8", "from_title": "Rovers", "what": "Calibrate the lidar"}]
     assert "> Calibrate the lidar (from the closed thread \"Rovers\", id t8)" in prompt_text(f), "pending leads reach ACP agents"
+    f["context"]["leads_open"] = [{"id": "t7-ab", "from": "t7", "from_title": "Lidar", "what": "Clean the lidar"}]
+    assert "> [lead t7-ab] Clean the lidar (left by \"Lidar\")" in prompt_text(f) and "settled_leads" in prompt_text(f), "leads to settle reach ACP agents"
     f["context"].update({"kind": "thread", "parallel": True})
     assert "remove that worktree and its local branch" in prompt_text(f), "finished-thread cleanup reaches ACP agents"
     assert "waits in your queue, place 1" in prompt_text({**f, "context": {**f["context"], "queued": {"position": 1}}}), "talk while queued reaches ACP agents"

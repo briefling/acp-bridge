@@ -62,9 +62,13 @@ def build_outcome(args: Dict[str, Any]) -> Built:
         return None, err
     if len(_s(args, "text")) > td.MAX_TEXT:  # the bridge posts it in the turn's message (bridge.py), never in the frame
         return None, f"text too long ({len(_s(args, 'text'))} chars, max {td.MAX_TEXT}): post the rest as a message first."
+    settled, err = td.clean_settled_leads(args.get("settled_leads"), outcome)
+    if err:
+        return None, err
     return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {}),
             **({"resume": True} if outcome == "waiting" and resume is True else {}),
-            **({"summary": summary} if summary else {}), **({"tags": tags} if tags else {})}, None
+            **({"summary": summary} if summary else {}), **({"tags": tags} if tags else {}),
+            **({"settled_leads": settled} if settled else {})}, None
 
 
 def build_propose(args: Dict[str, Any]) -> Built:
