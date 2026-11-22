@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -138,6 +139,8 @@ async def test_turn_streams_one_message_and_reuses_the_session(env, monkeypatch)
     await hub.push(deliver("t3", "with status", mid="m0"))
     status = [f for f in await hub.collect_turn("t3") if f["type"] == "status"]
     assert status and status[0]["text"] == "Reading README.md" and status[0]["recent"] == ["Reading README.md"]
+    at = status[0]["recentAt"]
+    assert len(at) == 1 and isinstance(at[0], int) and abs(at[0] - time.time() * 1000) < 60_000, "start time of each action"
 
 
 async def test_untrusted_author_and_duplicates_are_dropped(env):
@@ -417,3 +420,72 @@ async def test_text_after_a_tool_call_opens_a_new_paragraph():
     await fresh.on_update({"sessionUpdate": "tool_call", "title": "Read"})
     await fresh.on_update(chunk("Bonjour."))
     assert fresh.text == "Bonjour."  # nothing before the tool: no leading blank paragraph
+
+
+def stub_bridge():
+    class Stub:
+        def __init__(self):
+            self.turns, self.sent = {}, []
+
+        async def send(self, frame):
+            self.sent.append(frame)
+
+        def next_rev(self):
+            return len(self.sent)
+
+    return Stub()
+
+
+def chunk(s):
+    return {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": s}}
+
+
+async def test_text_held_by_the_edit_throttle_is_sent_before_a_tool_and_after_the_window(monkeypatch):
+    monkeypatch.setattr(bridge_mod, "EDIT_EVERY_S", 0.2)
+    b = stub_bridge()
+    turn = b.turns["t1"] = bridge_mod.Turn(b, "t1")
+    turn.started -= 3600
+    await turn.on_update(chunk("Jeu d'"))
+    await turn.on_update(chunk("essai lancé."))  # inside the window: held back
+    await turn.on_update({"sessionUpdate": "tool_call", "toolCallId": "c1", "title": "Terminal", "kind": "execute"})
+    kinds = [f["type"] for f in b.sent]
+    assert finals(b.sent)[-1]["text"] == "Jeu d'essai lancé."  # the whole text, never frozen mid-word during the tool
+    assert kinds.index("status") > len(kinds) - 1 - kinds[::-1].index("message.final")  # text first, then the action
+    await turn.on_update(chunk("Suite"))
+    await turn.on_update(chunk(" et fin."))  # held back, no tool after it: the deferred edit sends it
+    await asyncio.sleep(0.4)
+    assert finals(b.sent)[-1]["text"] == "Jeu d'essai lancé.\n\nSuite et fin."
+
+
+async def test_tool_call_update_renames_the_action_and_never_shows_a_command_line():
+    b = stub_bridge()
+    turn = b.turns["t1"] = bridge_mod.Turn(b, "t1")
+    turn.started -= 3600
+    await turn.on_update({"sessionUpdate": "tool_call", "toolCallId": "c1", "title": "Terminal", "kind": "execute",
+                          "rawInput": {}})
+    secret = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY aws s3 ls"
+    await turn.on_update({"sessionUpdate": "tool_call_update", "toolCallId": "c1", "title": secret, "kind": "execute",
+                          "rawInput": {"command": secret, "description": "List the buckets\nsecond line"}})
+    assert list(turn.tools) == ["List the buckets"]  # renamed in place, one line, no second entry
+    assert b.sent[-1]["text"] == "List the buckets" and b.sent[-1]["recent"] == ["List the buckets"]
+    await turn.on_update({"sessionUpdate": "tool_call", "toolCallId": "c2", "title": "Preparing file…", "kind": "edit"})
+    await turn.on_update({"sessionUpdate": "tool_call_update", "toolCallId": "c2", "title": "Write src/app.py"})
+    await turn.on_update({"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed",
+                          "content": [{"type": "content", "content": {"type": "text", "text": secret}}]})
+    await turn.on_update({"sessionUpdate": "tool_call_update", "toolCallId": "nope", "title": "Read x"})
+    await turn.on_update({"sessionUpdate": "tool_call", "toolCallId": "c3", "title": secret, "kind": "execute"})
+    await turn.on_update({"sessionUpdate": "tool_call_update", "toolCallId": "c3", "title": secret})
+    assert list(turn.tools) == ["List the buckets", "Write src/app.py", "Terminal"]
+    assert "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY" not in json.dumps(b.sent)  # a command line never leaves the host
+    assert turn.tools[-1] == b.sent[-1]["text"]
+
+
+async def test_status_counts_every_action_of_the_turn_while_recent_stays_capped():
+    b = stub_bridge()
+    turn = b.turns["t1"] = bridge_mod.Turn(b, "t1")
+    turn.started -= 3600
+    for i in range(23):
+        await turn.on_update({"sessionUpdate": "tool_call", "toolCallId": f"c{i}", "title": f"Read f{i}", "kind": "read"})
+    last = [f for f in b.sent if f["type"] == "status"][-1]
+    assert last["steps"] == 23
+    assert len(last["recent"]) == bridge_mod.MAX_ACTIVITY and last["recent"][-1] == "Read f22"

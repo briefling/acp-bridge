@@ -141,6 +141,23 @@ def socket_dir() -> str:
     return tempfile.mkdtemp(prefix="briefling-acp-")
 
 
+def one_line(value: Any) -> Optional[str]:
+    """The first non-blank line of a label, cut to MAX_STATUS (a status shows one line)."""
+    line = next((x.strip() for x in str(value or "").splitlines() if x.strip()), "")
+    return line[:MAX_STATUS] or None
+
+
+def tool_label(u: Dict[str, Any], kind: str) -> Optional[str]:
+    """What members see of an action. A command (`kind: execute`) never shows its title, the raw command line (an
+    `AWS_SECRET_ACCESS_KEY=…` would show, and the bridge has no Hermes redactor to mask it): only the description the
+    agent wrote in its input (claude-agent-acp: Bash `description`), else nothing. Read from `rawInput`, never from
+    `content`, which carries the command's output once it ran."""
+    if kind == "execute":
+        raw = u.get("rawInput") if isinstance(u.get("rawInput"), dict) else {}
+        return one_line(raw.get("description") or raw.get("command_description"))
+    return one_line(u.get("title"))
+
+
 class Turn:
     """One running prompt turn of a conversation: accumulates the streamed reply and relays it."""
 
@@ -150,6 +167,11 @@ class Turn:
         self.text = ""
         self.refused: List[str] = []
         self.tools: deque = deque(maxlen=MAX_ACTIVITY)
+        self.tool_ids: deque = deque(maxlen=MAX_ACTIVITY)  # toolCallId of each entry of `tools`
+        self.kinds: Dict[str, str] = {}  # toolCallId -> kind (an update may not repeat it)
+        self.steps = 0  # every tool call of the turn (`tools` keeps only the last MAX_ACTIVITY)
+        self.trailing: Optional[asyncio.Task] = None  # deferred edit of text held back by the throttle
+        self.tools_at: deque = deque(maxlen=MAX_ACTIVITY)  # start (epoch ms) of each entry of `tools`: status.recentAt
         self.acted = False
         self.sent = ""  # last text relayed
         self.last_edit = 0.0
@@ -167,11 +189,20 @@ class Turn:
         body = self.reply()[:MAX_TEXT]
         if not body or body == self.sent:
             return
-        if not force and time.monotonic() - self.last_edit < EDIT_EVERY_S:
+        wait = EDIT_EVERY_S - (time.monotonic() - self.last_edit)
+        if not force and wait > 0:  # held back: sent when the window ends, never left frozen mid-word
+            if self.trailing is None:
+                self.trailing = asyncio.create_task(self._trailing(wait))
             return
         self.sent, self.last_edit = body, time.monotonic()
         await self.bridge.send({"type": "message.final", "thread": self.thread, "msg_id": self.msg_id, "text": body,
                                 "rev": self.bridge.next_rev()})
+
+    async def _trailing(self, delay: float) -> None:
+        await asyncio.sleep(delay)
+        self.trailing = None
+        if self.bridge.turns.get(self.thread) is self:
+            await self.flush(force=True)
 
     async def status(self, text: Optional[str]) -> None:
         early = STATUS_AFTER_S - (time.monotonic() - self.started)
@@ -189,7 +220,8 @@ class Turn:
 
     async def _send_status(self, text: Optional[str]) -> None:
         await self.bridge.send({"type": "status", "thread": self.thread, "text": text, "rev": self.bridge.next_rev(),
-                                "since": self.since, **({"recent": list(self.tools)} if self.tools else {})})
+                                "since": self.since, **({"steps": self.steps} if self.steps else {}),
+                                **({"recent": list(self.tools), "recentAt": list(self.tools_at)} if self.tools else {})})
 
     async def on_update(self, u: Dict[str, Any]) -> None:
         kind = u.get("sessionUpdate")
@@ -203,11 +235,30 @@ class Turn:
                 self.text += c["text"]
                 await self.flush()
         elif kind == "tool_call":
+            await self.flush(force=True)  # the text so far goes out before the action, not after it
             self.acted = True
             self.after_tool = True
-            title = str(u.get("title") or u.get("kind") or "tool")[:MAX_STATUS]
+            self.steps += 1
+            tk, cid = str(u.get("kind") or ""), str(u.get("toolCallId") or "")
+            self.kinds[cid] = tk
+            title = tool_label(u, tk) or ("Terminal" if tk == "execute" else tk or "tool")
             self.tools.append(title)
+            self.tool_ids.append(cid)
+            self.tools_at.append(int(time.time() * 1000))
             await self.status(title)
+        elif kind == "tool_call_update" and "title" in u:
+            # claude-agent-acp sends `tool_call` before the input streams in (« Terminal », « Preparing file… »),
+            # then the real title in an update of the same toolCallId: rename that entry, never add one.
+            cid = str(u.get("toolCallId") or "")
+            if not cid or cid not in self.tool_ids:
+                return
+            tk = str(u.get("kind") or self.kinds.get(cid) or "")
+            self.kinds[cid] = tk
+            title = tool_label(u, tk)
+            i = list(self.tool_ids).index(cid)
+            if title and self.tools[i] != title:
+                self.tools[i] = title
+                await self.status(self.tools[-1])
 
     async def on_permission(self, p: Dict[str, Any]) -> None:
         tc = p.get("toolCall") if isinstance(p.get("toolCall"), dict) else {}
@@ -516,6 +567,8 @@ class Bridge:
                 self.turns.pop(thread, None)
                 if turn.late:
                     turn.late.cancel()
+                if turn.trailing:
+                    turn.trailing.cancel()
                 self.in_flight -= 1
                 await self.send({"type": "turn.ended", "thread": thread, "at": self.turn_at(thread),
                                  **({"stopped": True, "acted": turn.acted} if stopped else {})})
