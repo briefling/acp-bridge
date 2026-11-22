@@ -572,14 +572,14 @@ HUB_UNREACHABLE = {"ok": False, "error": "hub_unreachable", "detail": "briefling
 
 
 # Project memory: protocol/memory.ts limits.
-MEMORY_TEXT_MAX = 1000
+MEMORY_TEXT_MAX = 400      # a decision or pitfall + why, two sentences (protocol/memory.ts MEMORY_TEXT_MAX)
 
 
 MEMORY_SOURCES_MAX = 5
 MEMORY_SOURCE_MAX = 300
 MEMORY_Q_MAX = 200
 MEMORY_WHY_MAX = 300
-MEMORY_SYNTHESIS_MAX = 2000
+MEMORY_SYNTHESIS_MAX = 600  # a merge of several entries; a rewrite of one keeps MEMORY_TEXT_MAX (MEMORY_REWRITE_MAX)
 MEMORY_SUPERSEDES = (1, 30)
 MEMORY_REPLACES_MAX = 5    # protocol/memory.ts MEMORY_REPLACES_MAX
 MEMORY_TAGS_MAX = 10       # protocol/memory.ts MEMORY_TAGS_MAX / MEMORY_TAG_RE / MEMORY_TAG_BATCH
@@ -1903,8 +1903,9 @@ MEMORY_PROPOSE_SCHEMA = {
         "Propose an entry for this space's project memory. Read by every agent of the space. Write what the project's "
         "files (code, documents) do not say: a decision and its reason, a refused option, a pitfall that reading them "
         "does not show. Never a description of what a file already holds (selectors, values, which function does "
-        "what, a list): reading finds it and it goes stale. One fact per entry, 2 short sentences, plain words, "
-        "self-contained, verified while working. Never task progress, secrets, personal data, nor text copied from an "
+        "what, a list): reading finds it and it goes stale. One entry = 2 short sentences: the decision or the pitfall, "
+        "then why; plain words, no code identifier unless it is the pitfall, self-contained, verified while working. "
+        "Test first: if an agent ignores it, what breaks? Nothing = do not propose it. Never task progress, secrets, personal data, nor text copied from an "
         "external source you did not verify. kind 'rule' = tells agents how to behave ('always/never X'), with a "
         "title: a human approves it, a lead may pin it (then every turn carries it whole). Search first (memory_search): duplicates, the space's tags. The project memory keeps the facts "
         "of the project, for every agent; your skills keep your own procedures. Going back on a published entry: its "
@@ -1915,7 +1916,7 @@ MEMORY_PROPOSE_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "text": {"type": "string", "description": f"The entry: 2 short sentences, the why rather than the how (max {MEMORY_TEXT_MAX} chars), in the team's language."},
+            "text": {"type": "string", "description": f"The entry: the decision or pitfall in one sentence, then why in one sentence (max {MEMORY_TEXT_MAX} chars), in the team's language."},
             "kind": {"type": "string", "enum": ["fact", "rule"]},
             "title": {"type": "string", "description": (f"Required for a rule (max {MEMORY_TITLE_MAX} chars): what it is about and "
                                                          "when it applies, e.g. 'Token economy in long threads'. Agents see only "
