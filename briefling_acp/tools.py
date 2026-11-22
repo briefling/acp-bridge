@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import tooldefs as td
 
-SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.ACQUIRE_SCHEMA,
+SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.PROPOSE_ACTION_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.ACQUIRE_ALIAS_SCHEMA, td.RELEASE_ALIAS_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
            td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA]
 # The bridge's own tool (a Hermes agent gets the files downloaded by the plugin): the bridge fetches the file itself
@@ -200,7 +200,7 @@ def build_attachment_get(args: Dict[str, Any]) -> Built:
 BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "turn_outcome": build_outcome, "propose_thread": build_propose, "propose_issue": build_issue, "propose_plan": td.build_plan,
     "ask_choices": td.build_ask_choices, "poll_vote": td.build_poll_vote,
-    "propose_space_about": build_about, "acquire_action": _action("action.acquire"),
+    "propose_space_about": build_about, "propose_action": td.build_propose_action, "acquire_action": _action("action.acquire"),
     "release_action": _action("action.release"), "acquire_resource": _action("action.acquire"), "release_resource": _action("action.release"), "pushed_commits": build_pushed, "memory_search": build_search,
     "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
     "space_threads": td.build_space_threads, "thread_read": td.build_thread_read, "space_metrics": td.build_space_metrics,
@@ -213,7 +213,7 @@ assert set(BUILD) == set(NAMES)
 ERRORS = {
     "turn_outcome": td.OUTCOME_ERRORS, "propose_thread": td.PROPOSE_ERRORS, "propose_issue": td.ISSUE_ERRORS, "propose_plan": td.PLAN_ERRORS,
     "ask_choices": td.ASK_ERRORS, "poll_vote": td.POLL_VOTE_ERRORS,
-    "propose_space_about": td.ABOUT_ERRORS, "acquire_action": td.RESOURCE_ERRORS, "release_action": td.RESOURCE_ERRORS,
+    "propose_space_about": td.ABOUT_ERRORS, "propose_action": td.PROPOSE_ACTION_ERRORS, "acquire_action": td.RESOURCE_ERRORS, "release_action": td.RESOURCE_ERRORS,
     "acquire_resource": td.RESOURCE_ERRORS, "release_resource": td.RESOURCE_ERRORS,
     "pushed_commits": td.CI_ERRORS, "memory_search": td.MEMORY_ERRORS, "memory_read": td.MEMORY_ERRORS,
     "memory_propose": td.MEMORY_ERRORS, "topic_title": td.TITLE_ERRORS,

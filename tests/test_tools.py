@@ -358,6 +358,15 @@ def test_ask_choices_shared_with_the_plugin():
     assert "never a go" not in tools.result("poll_vote", {}, {})["detail"] and tools.result("poll_vote", {}, {})["ok"] is True
 
 
+def test_propose_action_shared_with_the_plugin():
+    assert "propose_action" in tools.NAMES
+    assert tools.BUILD["propose_action"]({"name": "gpu:mlx", "rule": "Before an MLX run."}) == (
+        {"type": "action.propose", "name": "gpu:mlx", "rule": "Before an MLX run.", "agents": [], "max": 1, "go": True}, None)
+    assert tools.BUILD["propose_action"]({"name": "mlx", "rule": "x"})[0] is None
+    assert "Settings › Actions" in tools.result("propose_action", {}, {"msg_id": "c1"})["detail"]
+    assert "acquire_action" in tools.refused("propose_action", "exists")["detail"]
+
+
 def test_build_plan_shared_with_the_plugin():
     step = {"title": " S\n1 ", "brief": " B "}
     assert tools.BUILD["propose_plan"]({"title": "P", "steps": [step, step], "repo": "acme/lab"}) == (

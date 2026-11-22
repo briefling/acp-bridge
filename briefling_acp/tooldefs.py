@@ -52,6 +52,8 @@ CARD_SHOWN = {
                           "briefling. End your turn now (in a thread: turn_outcome waiting, action 'approve the "
                           "elevation, then Check')."),
     "propose_space_about": f"Draft {_AFTER_TEXT}; the admin reviews it, applies it to the space settings and saves.",
+    "propose_action": (f"Card {_AFTER_TEXT}; nothing is saved until a space admin approves it. Approved, it is in the "
+                       "space's Settings › Actions and every agent finds it in its context; until then, do not take it."),
     "applet_propose": (f"Applet card {_AFTER_TEXT}; nothing is saved until a lead of the space clicks Save the applet. "
                        "It then appears in the space's Applets menu, where a lead launches it."),
     "reminder_propose": (f"Reminder card {_AFTER_TEXT}; nothing is saved until a member of the space clicks Add (they pick "
@@ -448,6 +450,79 @@ def action_result(action: str, answer: Dict[str, Any]) -> Dict[str, Any]:
         f'{action} is in use by thread "{holder}"{where}. Do NOT do it. Stop here: end your turn now with a '
         f"one-line message saying what you wait for, and do NOT call turn_outcome. The hub resumes this thread "
         f"with a new message when {action} is yours.")}
+
+
+# Action types (protocol/frames.ts RESOURCE_TYPES): an action is `<type>` or `<type>:<name>`.
+RESOURCE_TYPES = ("stack", "release", "emulator", "gateway", "gpu")
+ACTION_MAX_HOLDERS = 10  # protocol/frames.ts ACTION_MAX_HOLDERS
+PROPOSE_ACTION_ERRORS = {
+    "no_turn": "Only during a turn triggered by a lead (trusted human) in this conversation.",
+    "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge proposes an action here.",
+    "exists": "This action already exists in the space (listed in the conversation context): take it with acquire_action.",
+    "too_many": "The space has the maximum number of actions: tell the human, an admin removes one in Settings › Actions.",
+    "bad_name": f"Invalid name: <type> or <type>:<name>, lower case, type among {', '.join(RESOURCE_TYPES)} (e.g. gpu:mlx).",
+    "bad_rule": f"Invalid rule: one line (max {RESOURCE_RULE_MAX} chars) saying when to take it and when to release it.",
+    "bad_agent": "agents: only agents of this space (lowercase ids), at most 10; empty = every agent.",
+    "bad_frame": f"Invalid card: max 1-{ACTION_MAX_HOLDERS}, go true or false, reason <= 500 chars.",
+    "forbidden": "Not allowed for this instance.",
+}
+
+
+def build_propose_action(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None, str | None]":
+    """propose_action arguments -> the `action.propose` frame (without thread and client_id), or the refusal text.
+    Defaults as a saved action: every agent, one at a time, human go. The hub checks it all again."""
+    name = str(args.get("name") or "").strip()
+    if not RESOURCE_RE.fullmatch(name) or name.split(":")[0] not in RESOURCE_TYPES:
+        return None, PROPOSE_ACTION_ERRORS["bad_name"]
+    rule = " ".join(str(args.get("rule") or "").split())
+    if not rule or len(rule) > RESOURCE_RULE_MAX:
+        return None, PROPOSE_ACTION_ERRORS["bad_rule"]
+    raw = args.get("agents")
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or len(raw) > 10 or not all(isinstance(a, str) for a in raw):
+        return None, PROPOSE_ACTION_ERRORS["bad_agent"]
+    agents = list(dict.fromkeys(a.strip().lstrip("@").lower() for a in raw if a.strip()))
+    if not all(AGENT_NAME_RE.fullmatch(a) for a in agents):
+        return None, PROPOSE_ACTION_ERRORS["bad_agent"]
+    n = args.get("max", 1)
+    go = args.get("go", True)
+    if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= ACTION_MAX_HOLDERS or not isinstance(go, bool):
+        return None, PROPOSE_ACTION_ERRORS["bad_frame"]
+    why = str(args.get("why") or "").strip()
+    return {"type": "action.propose", "name": name, "rule": rule, "agents": agents, "max": n, "go": go,
+            **({"why": why[:500]} if why else {})}, None
+
+
+PROPOSE_ACTION_SCHEMA = {
+    "name": "propose_action",
+    "description": (
+        "Propose a new action of the space (a card an admin approves). When something you or another agent does must "
+        "not run twice at once, or only some agents can do it (e.g. you have MLX on your machine: gpu:mlx), so the "
+        "other agents discover it and take it with acquire_action. Only for an action missing from the conversation "
+        "context. It only posts a card; a space admin approves or refuses it."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": (
+                f"<type> or <type>:<name>, lower case; type among {', '.join(RESOURCE_TYPES)} (e.g. 'gpu:mlx', "
+                "'stack:app-dev').")},
+            "rule": {"type": "string", "description": (
+                f"One line (max {RESOURCE_RULE_MAX} chars), in the team's language: the step before which an agent "
+                "takes it and the one after which it releases it. Given word for word to every agent.")},
+            "agents": {"type": "array", "items": {"type": "string"}, "maxItems": 10, "description": (
+                "The agents of this space allowed to take it (lowercase ids, e.g. the one whose machine has it); "
+                "empty = every agent.")},
+            "max": {"type": "integer", "minimum": 1, "maximum": ACTION_MAX_HOLDERS, "description": "How many threads may hold it at once (default 1)."},
+            "go": {"type": "boolean", "description": (
+                "true (default): only in a turn a human asked for, never on another agent's mention (a deploy). "
+                "false: an agent may take it when called by another (a GPU run).")},
+            "why": {"type": "string", "description": "One sentence shown on the card: why the space needs it."},
+        },
+        "required": ["name", "rule"],
+    },
+}
 
 
 ABOUT_ERRORS = {
