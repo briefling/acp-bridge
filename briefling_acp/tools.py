@@ -14,7 +14,7 @@ from . import tooldefs as td
 
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
-           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA]
+           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA]
 # The bridge's own tool (a Hermes agent gets the files downloaded by the plugin): the bridge fetches the file itself
 # (attachments.py), the agent only names it.
 ATTACHMENT_GET_SCHEMA = {
@@ -104,8 +104,8 @@ def build_propose(args: Dict[str, Any]) -> Built:
 
 def build_issue(args: Dict[str, Any]) -> Built:
     repo, title, body = _s(args, "repo"), _one_line(args, "title"), _s(args, "body")
-    if not td.REPO_RE.fullmatch(repo):
-        return None, "repo is required, as owner/name (one of the repos listed in the message context)."
+    if not td.BOARD_REPO_RE.fullmatch(repo):
+        return None, "repo is required, as owner/name or a GitLab group/project (one of the repos listed in the message context)."
     if not title or len(title) > td.NEW_ISSUE_TITLE_MAX:
         return None, f"title is required, one line, max {td.NEW_ISSUE_TITLE_MAX} chars."
     if len(body) > td.NEW_ISSUE_BODY_MAX:
@@ -198,7 +198,7 @@ def build_attachment_get(args: Dict[str, Any]) -> Built:
 
 BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "turn_outcome": build_outcome, "propose_thread": build_propose, "propose_issue": build_issue, "propose_plan": td.build_plan,
-    "ask_choices": td.build_ask_choices,
+    "ask_choices": td.build_ask_choices, "poll_vote": td.build_poll_vote,
     "propose_space_about": build_about, "acquire_resource": _resource("resource.acquire"),
     "release_resource": _resource("resource.release"), "pushed_commits": build_pushed, "memory_search": build_search,
     "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
@@ -211,7 +211,7 @@ assert set(BUILD) == set(NAMES)
 
 ERRORS = {
     "turn_outcome": td.OUTCOME_ERRORS, "propose_thread": td.PROPOSE_ERRORS, "propose_issue": td.ISSUE_ERRORS, "propose_plan": td.PLAN_ERRORS,
-    "ask_choices": td.ASK_ERRORS,
+    "ask_choices": td.ASK_ERRORS, "poll_vote": td.POLL_VOTE_ERRORS,
     "propose_space_about": td.ABOUT_ERRORS, "acquire_resource": td.RESOURCE_ERRORS, "release_resource": td.RESOURCE_ERRORS,
     "pushed_commits": td.CI_ERRORS, "memory_search": td.MEMORY_ERRORS, "memory_read": td.MEMORY_ERRORS,
     "memory_propose": td.MEMORY_ERRORS, "topic_title": td.TITLE_ERRORS,
@@ -260,6 +260,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return td.introspect_result(answer)
     if tool == "radar_profile":
         return {"ok": True, "detail": td.RADAR_PROFILE_SENT}
+    if tool == "poll_vote":
+        return {"ok": True, "detail": td.POLL_VOTED}
     if tool == "radar_signal":
         return {"ok": True, "signal": answer.get("msg_id"), "detail": td.RADAR_RECORDED}
     if tool == "memory_propose":

@@ -344,6 +344,12 @@ def test_ask_choices_shared_with_the_plugin():
         {"type": "ask.choices", "text": "", "items": [{"label": "Who", "q": "Who deletes?", "options": ["Author", "Leads"]}]}, None)
     assert tools.BUILD["ask_choices"]({"questions": [{**q, "choices": ["Author"]}]})[0] is None
     assert "1 to 5 questions" in tools.refused("ask_choices", "bad_frame")["detail"]
+    poll, err = tools.BUILD["ask_choices"]({"questions": [q], "mode": "poll", "voters": ["reviewer"]})
+    assert err is None and poll["poll"] == {"voters": ["reviewer"]}
+    assert "poll_vote" in tools.NAMES
+    assert tools.BUILD["poll_vote"]({"ask_id": "c1", "choices": ["Leads"]}) == ({"type": "poll.vote", "ask_id": "c1", "picks": ["Leads"]}, None)
+    assert "did not name you" in tools.refused("poll_vote", "not_voter")["detail"]
+    assert "never a go" not in tools.result("poll_vote", {}, {})["detail"] and tools.result("poll_vote", {}, {})["ok"] is True
 
 
 def test_build_plan_shared_with_the_plugin():
