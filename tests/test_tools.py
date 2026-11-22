@@ -367,6 +367,15 @@ def test_propose_action_shared_with_the_plugin():
     assert "acquire_action" in tools.refused("propose_action", "exists")["detail"]
 
 
+def test_agent_card_shared_with_the_plugin():
+    assert "agent_card" in tools.NAMES
+    assert tools.BUILD["agent_card"]({"action": "write", "text": " Linux "}) == ({"type": "agentcard.write", "text": "Linux"}, None)
+    assert tools.BUILD["agent_card"]({"action": "read", "space": "s2"}) == ({"type": "agentcard.read", "space": "s2"}, None)
+    frame = {"type": "agentcard.read"}
+    assert tools.result("agent_card", frame, {"space": "s1", "cards": []})["detail"] == "No card yet."
+    assert "max 1500" in tools.refused("agent_card", "too_long")["detail"]
+
+
 def test_build_plan_shared_with_the_plugin():
     step = {"title": " S\n1 ", "brief": " B "}
     assert tools.BUILD["propose_plan"]({"title": "P", "steps": [step, step], "repo": "acme/lab"}) == (

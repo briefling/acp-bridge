@@ -14,7 +14,7 @@ from . import tooldefs as td
 
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.PROPOSE_ACTION_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.ACQUIRE_ALIAS_SCHEMA, td.RELEASE_ALIAS_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
-           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA]
+           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA, td.AGENT_CARD_SCHEMA]
 # The bridge's own tool (a Hermes agent gets the files downloaded by the plugin): the bridge fetches the file itself
 # (attachments.py), the agent only names it.
 ATTACHMENT_GET_SCHEMA = {
@@ -206,7 +206,7 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "space_threads": td.build_space_threads, "thread_read": td.build_thread_read, "space_metrics": td.build_space_metrics,
     "radar_signal": td.build_radar_signal,
     "radar_profile": td.build_radar_profile,
-    "attachment_get": build_attachment_get,
+    "attachment_get": build_attachment_get, "agent_card": td.build_agent_card,
 }
 assert set(BUILD) == set(NAMES)
 
@@ -221,6 +221,7 @@ ERRORS = {
     "radar_signal": td.RADAR_ERRORS,
     "radar_profile": td.RADAR_PROFILE_ERRORS,
     "attachment_get": {**td.INTROSPECT_ERRORS, "files_off": "This hub stores no files."},
+    "agent_card": td.AGENT_CARD_ERRORS,
 }
 
 
@@ -255,6 +256,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return td.memory_result(answer)
     if tool in ("space_threads", "thread_read", "space_metrics"):
         return td.introspect_result(answer)
+    if tool == "agent_card":
+        return td.agent_card_result(frame, answer)
     if tool == "radar_profile":
         return {"ok": True, "detail": td.RADAR_PROFILE_SENT}
     if tool == "poll_vote":
