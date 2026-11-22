@@ -226,6 +226,8 @@ def test_prompt_text_gives_the_plugin_context():
     assert t.startswith('[briefling Lounge topic "Port Kiro", message from Ada]\n[Space: Project X]\n')
     assert "acquire_action" in t and "acme/app" in t and "propose_thread tool" in t
     assert "- stack:dev: Take before cdk deploy, release after." in t, "the admin's rule reaches ACP agents too"
+    owned = prompt_text({**f, "context": {**f["context"], "agent_owners": [{"agent": "Ada", "owner": "Grace"}]}})
+    assert "[Human owner of each agent of this space: Ada -> Grace. " in owned, "the agents' owners reach ACP agents too"
     rules = prompt_text({**f, "context": {**f["context"], "memory_pinned": [{"id": "r1", "title": "Token economy", "text": "Read by range."}],
                                           "memory_rules": [{"id": "r2", "title": "Deploy guard"}]}})
     assert "> (r1) Token economy\n> Read by range." in rules and "- r2: Deploy guard" in rules, "pinned rules and the rule index reach ACP agents too"

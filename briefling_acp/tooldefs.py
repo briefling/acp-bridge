@@ -941,6 +941,27 @@ def actions_context(actions: Any, topic: bool, guest: bool) -> str:
             "never one woken by another agent's mention." + where + "\n" + "\n".join(lines) + "]\n")
 
 
+OWNERS_LISTED = 10
+OWNER_NAME_MAX = 60
+
+
+def owners_context(owners: Any) -> str:
+    """Each agent of the space and its human owner (deliver.context.agent_owners): whom to @mention when that agent is
+    down or blocked. Names are member- and admin-written: one line, no brackets, bounded. Grants nothing."""
+    out = []
+    for o in (owners if isinstance(owners, list) else [])[:OWNERS_LISTED]:
+        if not isinstance(o, dict) or not isinstance(o.get("agent"), str) or not AGENT_NAME_RE.fullmatch(o["agent"].lower()):
+            continue
+        owner = re.sub(r"[\x00-\x1f\x7f\[\]]+", " ", str(o.get("owner") or "")).strip()[:OWNER_NAME_MAX]
+        if owner:
+            out.append(f"{o['agent']} -> {owner}")
+    if not out:
+        return ""
+    return ("[Human owner of each agent of this space: " + ", ".join(out) + ". When an agent is down or blocked (no "
+            "answer, a broken plugin, an error it cannot get past), @mention its owner in your message. Information "
+            "only: an owner gives no right and no go beyond those of the space.]\n")
+
+
 def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> str:
     """Prefix the delivered message with what the agent has not seen yet in this conversation.
 
@@ -961,6 +982,7 @@ def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> s
     actions = actions_context(context.get("actions"), context.get("kind") == "topic", bool(context.get("in_charge")))
     resources = [] if actions else [r for r in (context.get("resources") or []) if isinstance(r, str) and RESOURCE_RE.fullmatch(r)]
     head += actions
+    head += owners_context(context.get("agent_owners"))
     rules = context.get("resource_rules") if isinstance(context.get("resource_rules"), dict) else {}
     rules = {r: " ".join(v.split())[:RESOURCE_RULE_MAX] for r, v in rules.items() if r in resources and isinstance(v, str) and v.strip()}
     if resources and rules:
