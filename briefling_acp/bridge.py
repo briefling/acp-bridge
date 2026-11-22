@@ -246,9 +246,10 @@ class Turn:
             self.tool_ids.append(cid)
             self.tools_at.append(int(time.time() * 1000))
             await self.status(title)
-        elif kind == "tool_call_update" and "title" in u:
+        elif kind == "tool_call_update" and ("title" in u or "rawInput" in u):
             # claude-agent-acp sends `tool_call` before the input streams in (« Terminal », « Preparing file… »),
-            # then the real title in an update of the same toolCallId: rename that entry, never add one.
+            # then the real title in an update of the same toolCallId: rename that entry, never add one. A command's
+            # description comes later still, in an update with `rawInput` only (an unchanged title is left out).
             cid = str(u.get("toolCallId") or "")
             if not cid or cid not in self.tool_ids:
                 return

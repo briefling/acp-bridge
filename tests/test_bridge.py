@@ -489,3 +489,23 @@ async def test_status_counts_every_action_of_the_turn_while_recent_stays_capped(
     last = [f for f in b.sent if f["type"] == "status"][-1]
     assert last["steps"] == 23
     assert len(last["recent"]) == bridge_mod.MAX_ACTIVITY and last["recent"][-1] == "Read f22"
+
+
+async def test_command_description_arriving_in_an_update_without_title_renames_the_action():
+    # The exact sequence of claude-agent-acp 0.109.1 for one Bash call (recorded against the real adapter and CLI):
+    # the description comes in an update that only carries rawInput (its title did not change, so it is left out).
+    b = stub_bridge()
+    turn = b.turns["t1"] = bridge_mod.Turn(b, "t1")
+    turn.started -= 3600
+    for u in ({"sessionUpdate": "tool_call", "toolCallId": "toolu_01", "title": "Terminal", "kind": "execute",
+               "status": "pending", "rawInput": {}},
+              {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_01", "title": "echo hello",
+               "rawInput": {"command": "echo hello"}},
+              {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_01",
+               "rawInput": {"command": "echo hello", "description": "Run the unit tests"}},
+              {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_01"},
+              {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_01", "status": "completed"}):
+        await turn.on_update(u)
+    assert list(turn.tools) == ["Run the unit tests"]
+    assert b.sent[-1]["recent"] == ["Run the unit tests"] and b.sent[-1]["steps"] == 1
+    assert "echo hello" not in json.dumps(b.sent)
