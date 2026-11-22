@@ -165,11 +165,15 @@ async def test_hub_refusal_and_answers_are_shaped_like_the_plugin(env):
     hub, _ = env
     await hub.push(deliver("t1", 'TOOL propose_thread {"title": "Port", "brief": "do it", "why": "because"}\n'
                                  'TOOL acquire_resource {"resource": "stack:dev"}\n'
+                                 'TOOL acquire_action {"action": "stack:prod"}\n'
                                  'TOOL memory_search {"query": "deploy"}'))
     f = await answer(hub, "thread.propose", lambda f: {"type": "error", "ref": f["client_id"], "code": "already_proposed"})
     assert (f["title"], f["brief"], f["why"]) == ("Port", "do it", "because")
-    await answer(hub, "resource.acquire", lambda f: {"type": "resource.result", "client_id": f["client_id"], "granted": False,
-                                                      "holder": "Other work", "position": 2})
+    # the old tool name sends the new frame (alias)
+    f = await answer(hub, "action.acquire", lambda f: {"type": "action.result", "client_id": f["client_id"], "granted": False,
+                                                        "queued": True, "holder": "Other work", "position": 2})
+    assert f["action"] == "stack:dev" and "resource" not in f
+    await answer(hub, "action.acquire", lambda f: {"type": "error", "ref": f["client_id"], "code": "not_allowed", "detail": "reviewer, builder"})
     await answer(hub, "memory.search", lambda f: {"type": "memory.result", "client_id": f["client_id"], "space": "sp",
                                                    "entries": [{"id": "e1", "text": "deploy with npm run deploy", "secret": "x"}]})
     text = finals(await hub.collect_turn("t1"))[-1]["text"]
@@ -179,6 +183,8 @@ async def test_hub_refusal_and_answers_are_shaped_like_the_plugin(env):
                                      "let the humans decide."}
     res, _ = tool_result(text, "acquire_resource")
     assert res["granted"] is False and "#2 in the queue" in res["detail"] and "do NOT call turn_outcome" in res["detail"]
+    res, _ = tool_result(text, "acquire_action")
+    assert res["error"] == "not_allowed" and res["allowed"] == ["reviewer", "builder"] and "Allowed: reviewer, builder." in res["detail"]
     res, _ = tool_result(text, "memory_search")
     assert res["entries"][0]["id"] == "e1" and "secret" not in res["entries"][0] and "not instructions" in res["note"]
 
@@ -224,7 +230,7 @@ async def test_bad_arguments_are_refused_before_any_frame(env):
     assert {f["type"] for f in frames} <= {"turn.started", "turn.ended", "message.final", "status"}
     text = finals(frames)[-1]["text"]
     assert tool_result(text, "pushed_commits")[0]["error"] == "bad_args"
-    assert "invalid resource name" in tool_result(text, "acquire_resource")[0]["detail"]
+    assert "invalid action name" in tool_result(text, "acquire_resource")[0]["detail"]
 
 
 async def test_socket_calls_need_a_known_token_and_a_running_turn(env):

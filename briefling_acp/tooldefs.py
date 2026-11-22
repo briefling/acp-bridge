@@ -30,7 +30,7 @@ NO_TEXT = ("Nothing was posted in this thread during this turn: the human would 
 
 
 MAX_ABOUT = 4000  # protocol/frames.ts MAX_ABOUT (space description, admin-written)
-RESOURCE_RULE_MAX = 200  # protocol/frames.ts RESOURCE_RULE_MAX (usage rule of a shared resource, admin-written)
+RESOURCE_RULE_MAX = 200  # protocol/frames.ts RESOURCE_RULE_MAX (usage rule of an action, admin-written)
 TOPIC_HEADING_MAX = 60  # protocol/frames.ts TOPIC_HEADING_MAX (topic title; the hub cleans it again)
 NEW_ISSUE_TITLE_MAX = 256  # protocol/frames.ts NEW_ISSUE_TITLE_MAX (GitHub's limit)
 NEW_ISSUE_BODY_MAX = 20_000  # protocol/frames.ts NEW_ISSUE_BODY_MAX
@@ -409,14 +409,45 @@ OUTCOME_ERRORS = {
 
 RESOURCE_ERRORS = {
     "not_in_charge": "You are a guest in this thread (called by a mention): only its agent in charge does that here.",
-    "not_thread": "Only in a thread, not in a Lounge topic: shared resources are taken by work threads.",
-    "no_turn": "Only during a turn triggered by a trusted human in this thread.",
-    "unknown_resource": ("This resource is not declared in this space's settings (the admin declares them): "
-                         "use only the resources listed in the conversation context."),
+    "not_thread": "Only in a thread, not in a Lounge topic: actions are taken in work threads.",
+    "no_turn": "Only during your own turn in this thread, triggered by a trusted human.",
+    "unknown_resource": ("This action is not declared in this space's settings (the admin declares them): "
+                         "use only the actions listed in the conversation context."),
+    "not_allowed": ("You are not allowed to take this action. Do NOT do it: tell the human which agents may "
+                    "(listed here), so they call one of them."),
+    "no_go": ("This action needs a human's go: this turn was not asked by a human (another agent's mention woke "
+              "you). Do NOT do it: ask the human for the go and stop."),
     "forbidden": "Not allowed for this instance.",
-    "bad_frame": "Invalid resource name.",
+    "bad_frame": "Invalid action name.",
     "queued": QUEUED_REFUSAL,
 }
+
+
+def action_refused(code: str, detail: str = "") -> Dict[str, Any]:
+    """acquire_action / release_action refused by the hub (`detail` of not_allowed: the allowed agents)."""
+    out = {"ok": False, "error": code, "detail": RESOURCE_ERRORS.get(code, code)}
+    if code == "not_allowed" and detail:
+        out["allowed"] = [a for a in detail.replace(",", " ").split() if AGENT_NAME_RE.fullmatch(a)][:10]
+        out["detail"] += " Allowed: " + ", ".join(out["allowed"]) + "."
+    return out
+
+
+def action_result(action: str, answer: Dict[str, Any]) -> Dict[str, Any]:
+    """The tool result for `action.result` (or the old `resource.result`): granted, queued (thread parked) or busy."""
+    if answer.get("granted") is True:
+        return {"ok": True, "granted": True,
+                "detail": f"You hold {action} until you call release_action or your turn ends. Do it now."}
+    holder = str(answer.get("holder") or "another thread")[:120]
+    if answer.get("queued") is False:
+        return {"ok": True, "granted": False, "holder": holder, "detail": (
+            f'{action} is in use by thread "{holder}". Do NOT do it. As a guest you are not queued: say so to the '
+            f"human in one line and stop; it can be asked again once it is free.")}
+    position = answer.get("position") if isinstance(answer.get("position"), int) else None
+    where = f" (you are #{position} in the queue)" if position else ""
+    return {"ok": True, "granted": False, "holder": holder, "position": position, "detail": (
+        f'{action} is in use by thread "{holder}"{where}. Do NOT do it. Stop here: end your turn now with a '
+        f"one-line message saying what you wait for, and do NOT call turn_outcome. The hub resumes this thread "
+        f"with a new message when {action} is yours.")}
 
 
 ABOUT_ERRORS = {
@@ -787,7 +818,7 @@ NONTECH_HINT = ("The author of this message is not technical (set by the space a
 
 def queued_context(context: Dict[str, Any], code: bool = True) -> str:
     """Talk turn of a work thread waiting in the agent's queue (`queued`), or the first turn once its place came
-    (`relaunched`). Lounge rights while queued; the hub refuses acquire_resource, turn_outcome and pushed_commits."""
+    (`relaunched`). Lounge rights while queued; the hub refuses acquire_action, turn_outcome and pushed_commits."""
     if context.get("kind") == "topic":
         return ""
     q = context.get("queued")
@@ -797,14 +828,42 @@ def queued_context(context: Dict[str, Any], code: bool = True) -> str:
         return (f"[This thread waits in your queue, place {q['position']}{on}: a talk turn, it keeps its place. "
                 "Reply to what you are asked, with the Lounge's rights: "
                 + ("read code, infra and logs; run tests; a throwaway spike in a dedicated git worktree. Not now: commit, "
-                   "push, deploy, creating, modifying or deleting a cloud resource, or a shared resource. " if code else
+                   "push, deploy, creating, modifying or deleting a cloud resource, or an action of the space. " if code else
                    "look things up, read the space's files and data, try something without keeping it. Not now: changing "
-                   "something for good (a file, a script, a scheduled job, a cloud resource) or a shared resource. ")
+                   "something for good (a file, a script, a scheduled job, a cloud resource) or an action of the space. ")
                 + "Do not call turn_outcome. When its place comes, briefling relaunches you here to do the work.]\n")
     if context.get("relaunched") is True:
         return ("[Your place in the queue has come: this thread now holds the hand, the usual rights of a thread apply "
-                "again (commit, push, deploy, shared resources, turn_outcome).]\n")
+                "again (commit, push, deploy, actions, turn_outcome).]\n")
     return ""
+
+
+def actions_context(actions: Any, topic: bool, guest: bool) -> str:
+    """The space's actions (deliver.context.actions): rule, allowed agents, N at once, human go; "" when none.
+
+    Every agent gets them, topics and guests included, so it knows which agent may do what and whom to call.
+    """
+    lines = []
+    for a in actions if isinstance(actions, list) else []:
+        name = a.get("name") if isinstance(a, dict) else None
+        if not (isinstance(name, str) and RESOURCE_RE.fullmatch(name)):
+            continue
+        agents = [x for x in (a.get("agents") or []) if isinstance(x, str) and AGENT_NAME_RE.fullmatch(x)]
+        n = a.get("max") if isinstance(a.get("max"), int) and not isinstance(a.get("max"), bool) and a.get("max") > 0 else 1
+        rule = " ".join(a["rule"].split())[:RESOURCE_RULE_MAX] if isinstance(a.get("rule"), str) and a["rule"].strip() else \
+            "no rule set, take it right before doing it, release it after"
+        who = "agents: " + ", ".join(agents) if agents else "any agent"
+        lines.append(f"- {name} ({who}; {n} thread{'s' if n > 1 else ''} at a time"
+                     + ("; needs a human's go" if a.get("go") is not False else "") + f"): {rule}")
+    if not lines:
+        return ""
+    where = (" Not in a Lounge topic: an action is taken in a work thread (propose one)." if topic else
+             " As a guest here, take one you are allowed only when the human asked you; busy, you are not queued: "
+             "say so and stop." if guest else "")
+    return ("[Actions in this space: take each one with acquire_action right before doing it and release it with "
+            "release_action, at the steps its rule names (rules set by the space admin). Only the listed agents may "
+            "take one (ask a human to call one of them otherwise); a human's go means a turn a human asked you for, "
+            "never one woken by another agent's mention." + where + "\n" + "\n".join(lines) + "]\n")
 
 
 def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> str:
@@ -824,7 +883,9 @@ def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> s
         # Whole description (bounded by the hub): the admin wrote it for the agent; cutting it hid most of it, and the
         # agent in charge needs all of it to propose changes (propose_space_about).
         head += f"[Space: {about.strip()[:MAX_ABOUT]}]\n"
-    resources = [r for r in (context.get("resources") or []) if isinstance(r, str) and RESOURCE_RE.fullmatch(r)]
+    actions = actions_context(context.get("actions"), context.get("kind") == "topic", bool(context.get("in_charge")))
+    resources = [] if actions else [r for r in (context.get("resources") or []) if isinstance(r, str) and RESOURCE_RE.fullmatch(r)]
+    head += actions
     rules = context.get("resource_rules") if isinstance(context.get("resource_rules"), dict) else {}
     rules = {r: " ".join(v.split())[:RESOURCE_RULE_MAX] for r, v in rules.items() if r in resources and isinstance(v, str) and v.strip()}
     if resources and rules:
@@ -832,12 +893,12 @@ def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> s
         # of the space (nothing left to guess from the name). A resource saved before rules existed keeps the default.
         lines = [f"- {r}: {rules[r]}" if r in rules else f"- {r}: no rule set, take it right before using it, release it after."
                  for r in resources]
-        head += ("[Shared resources in this space: take each one with acquire_resource and release it with "
-                 "release_resource exactly at the steps its rule names (rules set by the space admin):\n"
+        head += ("[Actions in this space: take each one with acquire_action and release it with "
+                 "release_action exactly at the steps its rule names (rules set by the space admin):\n"
                  + "\n".join(lines) + "]\n")
     elif resources:
-        head += (f"[Shared resources in this space (take one with acquire_resource right before using it, "
-                 f"release_resource after): {', '.join(resources)}.]\n")
+        head += (f"[Actions in this space (take one with acquire_action right before doing it, "
+                 f"release_action after): {', '.join(resources)}.]\n")
     head += issue_context(context.get("issue"))
     head += rules_context(context.get("memory_pinned"), context.get("memory_rules"))
     head += memory_context(context.get("memory"), context.get("memory_tags"))
@@ -874,19 +935,20 @@ def with_context(context: Dict[str, Any], text: str, mounted: bool = False) -> s
     if isinstance(in_charge, str) and AGENT_NAME_RE.fullmatch(in_charge):
         # Guest of a work thread: the hub refuses the owner's tools to it (not_in_charge); saying so saves a wasted call.
         head += (f"[You were called into this work thread by a mention: {in_charge.capitalize()} is the agent in charge. "
-                 "Answer what you are asked here. Do not call turn_outcome, acquire_resource, release_resource, "
-                 "propose_thread, propose_plan, propose_issue or pushed_commits: they stay with the agent in charge.]\n")
+                 "Answer what you are asked here. Do not call turn_outcome, propose_thread, propose_plan, propose_issue or "
+                 "pushed_commits: they stay with the agent in charge. You may take an action of the space you are "
+                 "allowed (acquire_action) when the human asked you for it.]\n")
     if context.get("kind") == "topic":
         # Product rule: the Lounge is for looking and trying, a thread for anything that changes the project.
-        # Shared resources are also refused by the hub outside a thread (acquire_resource -> not_thread).
+        # Actions are also refused by the hub outside a thread (acquire_action -> not_thread).
         head += ("[Lounge topic: the team's open discussion. Reply briefly to what you are asked. "
                  + ("Allowed here: read code, infra and logs; run tests; a throwaway spike in a dedicated git worktree; "
                     "invoke a Lambda or Bedrock by hand. Not here: commit, push, deploy, creating, modifying or deleting "
-                    "a cloud resource, or using a shared resource. For those, or when a human wants to move to implementation, "
+                    "a cloud resource, or taking an action of the space. For those, or when a human wants to move to implementation, "
                     if code else
                     "Allowed here: look things up, read the space's files and data, try something without keeping it. "
                     "Not here: changing something for good (a file, a script, a scheduled job, a cloud resource) or "
-                    "using a shared resource. For those, or when a human wants to move to real work, ")
+                    "taking an action of the space. For those, or when a human wants to move to real work, ")
                  + (NO_THREADS_HINT if context.get("threads") is False else
                     "call the propose_thread tool (short title, one-sentence reason, 3 to 5 line brief, context summary), or propose_plan "
                     "when the work is a sequence of steps to run one after the other; "
@@ -929,7 +991,7 @@ PROPOSE_SCHEMA = {
         "In a Lounge topic, call it when a human asks, in any language, to move to implementation or real work "
         "(\"go\", \"do it\", \"implement it\", \"vas-y\"...) "
         "or when the work changes something for good (a file, a script, a scheduled job, a commit, a push, a deploy, "
-        "a cloud resource) or needs a shared resource (none of these happen in the Lounge). The new thread receives your brief, your context summary, a link to the "
+        "a cloud resource) or needs an action of the space (none of these happen in the Lounge). The new thread receives your brief, your context summary, a link to the "
         "topic (thread_read) and the topic's 10 newest attachments, not the topic's messages: write the context. "
         "In a thread, call it only for a separate deliverable that should not ride along with the current work "
         "(a human asks for it, or you spot it and the human agrees), never to hand off the work of this thread; "
@@ -1162,7 +1224,7 @@ OUTCOME_SCHEMA = {
     "description": (
         "End a thread's turn: done, or waiting for a human action. Call it once, at the very end of a turn in a "
         "thread (not a Lounge topic); not while you are still working or waiting on a third party, nor after "
-        "acquire_resource answered granted=false (just end your turn). 'done' = the task is over: say it as soon as "
+        "acquire_action answered granted=false (just end your turn). 'done' = the task is over: say it as soon as "
         "it is, it frees your place (you may hold a limited number of threads in a space, one in strict mode). "
         "'waiting' = the human must act before it is over (e.g. '/restart the gateway', 'approve PR #12'): the thread "
         "shows the action until they reply or click Done; resume=true when you carry on after it ('tell me Done and I "
@@ -1262,40 +1324,52 @@ def clean_summary(raw: Any):
     return {"status": status, "decisions": decisions, "next_steps": next_steps, "waiting_on": waiting_on}, None
 
 
-RESOURCE_PARAMS = {
+ACTION_PARAMS = {
     "type": "object",
     "properties": {
-        "resource": {"type": "string", "description": (
-            "Name of the shared resource, exactly as listed in the conversation context (e.g. 'emulator', "
-            "'stack:briefling-dev').")},
+        "action": {"type": "string", "description": (
+            "Name of the action, exactly as listed in the conversation context (e.g. 'emulator', "
+            "'stack:briefling-prod').")},
     },
-    "required": ["resource"],
+    "required": ["action"],
 }
 
 
 ACQUIRE_SCHEMA = {
-    "name": "acquire_resource",
+    "name": "acquire_action",
     "description": (
-        "Take a shared resource of the space before using it. So no other thread uses it meanwhile (deploying a "
-        "stack, the emulator, restarting the gateway...). In a thread, call it right BEFORE using the resource, never "
-        "earlier (not at the start of the turn, not while still coding), following the rule of when to take and "
-        "release each given in the conversation context. Granted: use it, then call release_resource as soon as you "
-        "are done (otherwise it is freed at the end of your turn). Not granted: do NOT use it; end your turn with a "
-        "one-line message and without turn_outcome: the hub resumes this thread when it is yours."
+        "Take an action of the space before doing it. So no other thread does it meanwhile (deploying a stack, "
+        "publishing a release, the emulator, restarting the gateway...). In a thread, call it right BEFORE doing it, "
+        "never earlier (not at the start of the turn, not while still coding), following the rule of when to take "
+        "and release each given in the conversation context. Granted: do it, then call release_action as soon as you "
+        "are done (otherwise it is freed at the end of your turn). Not granted: do NOT do it; queued: end your turn "
+        "with a one-line message and without turn_outcome, the hub resumes this thread when it is yours."
     ),
-    "parameters": RESOURCE_PARAMS,
+    "parameters": ACTION_PARAMS,
 }
 
 
 RELEASE_SCHEMA = {
-    "name": "release_resource",
+    "name": "release_action",
     "description": (
-        "Release a shared resource you took. In a thread, as soon as you are done with it (deploy finished, emulator "
-        "no longer needed), so the next waiting thread gets it; otherwise it is freed at the end of your turn. Names "
+        "Release an action you took. In a thread, as soon as you are done with it (deploy finished, emulator no "
+        "longer needed), so the next waiting thread gets it; otherwise it is freed at the end of your turn. Names "
         "as listed in the conversation context."
     ),
-    "parameters": RESOURCE_PARAMS,
+    "parameters": ACTION_PARAMS,
 }
+
+
+# Old names, kept while agents' notes and skills still say them (removed with the legacy names, plan step 5).
+RESOURCE_PARAMS = {
+    "type": "object",
+    "properties": {"resource": {"type": "string", "description": "Name of the action, as listed in the conversation context."}},
+    "required": ["resource"],
+}
+ACQUIRE_ALIAS_SCHEMA = {"name": "acquire_resource", "description": "Old name of acquire_action (same tool): call acquire_action.",
+                        "parameters": RESOURCE_PARAMS}
+RELEASE_ALIAS_SCHEMA = {"name": "release_resource", "description": "Old name of release_action (same tool): call release_action.",
+                        "parameters": RESOURCE_PARAMS}
 
 
 PUSHED_SCHEMA = {

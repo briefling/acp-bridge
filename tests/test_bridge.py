@@ -224,7 +224,7 @@ def test_prompt_text_gives_the_plugin_context():
                          "resource_rules": {"stack:dev": "Take before cdk deploy, release after."}})
     t = prompt_text(f)
     assert t.startswith('[briefling Lounge topic "Port Kiro", message from Ada]\n[Space: Project X]\n')
-    assert "acquire_resource" in t and "acme/app" in t and "propose_thread tool" in t
+    assert "acquire_action" in t and "acme/app" in t and "propose_thread tool" in t
     assert "- stack:dev: Take before cdk deploy, release after." in t, "the admin's rule reaches ACP agents too"
     rules = prompt_text({**f, "context": {**f["context"], "memory_pinned": [{"id": "r1", "title": "Token economy", "text": "Read by range."}],
                                           "memory_rules": [{"id": "r2", "title": "Deploy guard"}]}})

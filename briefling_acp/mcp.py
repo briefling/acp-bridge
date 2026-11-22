@@ -64,7 +64,7 @@ def _route(msg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Tupl
             "protocolVersion": asked if asked in VERSIONS else VERSIONS[0],
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": "briefling", "version": _version()},
-            "instructions": "briefling's tools for this conversation (cards, turn outcome, shared resources, project memory).",
+            "instructions": "briefling's tools for this conversation (cards, turn outcome, actions, project memory).",
         }}, None
     if method == "ping":
         return {"id": rid, "result": {}}, None

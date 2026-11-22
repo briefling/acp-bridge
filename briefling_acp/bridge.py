@@ -2,10 +2,10 @@
 process, one ACP session per briefling conversation (thread or Lounge topic).
 
 Hub -> bridge: `deliver` (a human's message), `turn.stop` (Stop button), `subscribed`, `error`, and the answers to
-the tool frames (`ack`, `resource.result`, `memory.result`, `introspect.result`, `memory.proposed`, `error` with `ref`).
+the tool frames (`ack`, `action.result`, `memory.result`, `introspect.result`, `memory.proposed`, `error` with `ref`).
 Bridge -> hub: `subscribe`, `turn.started` / `turn.ended`, `message.final` (one message per turn, streamed through
 successive edits: same msg_id, growing rev), `status` (tool in progress, ephemeral), `ping`, and the frames of
-briefling's tools (`thread.outcome`, `thread.propose`, `issue.propose`, `about.propose`, `resource.acquire|release`,
+briefling's tools (`thread.outcome`, `thread.propose`, `issue.propose`, `about.propose`, `action.acquire|release`,
 `ci.watch`, `memory.search|read|propose`), the same as the Hermes plugin's.
 
 Tools: the agent gets them from a local MCP server (`briefling-acp mcp`, declared in `session/new`), which relays each
@@ -131,9 +131,10 @@ def is_briefling_tool(title: str) -> bool:
 
 
 class HubRefused(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str, detail: str = ""):
         super().__init__(code)
         self.code = code
+        self.detail = detail
 
 
 def socket_dir() -> str:
@@ -492,14 +493,14 @@ class Bridge:
             self.on_release(frame.get("release"))
         elif kind == "release":  # pushed by the hub right after a deploy
             self.on_release(frame.get("release"))
-        elif kind in ("ack", "resource.result", "memory.result", "introspect.result", "memory.proposed", "files.urls"):
+        elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "memory.proposed", "files.urls"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():
                 fut.set_result(frame)
         elif kind == "error":
             fut = self.waiting.pop(str(frame.get("ref")), None)
             if fut and not fut.done():
-                fut.set_exception(HubRefused(str(frame.get("code") or "error")))
+                fut.set_exception(HubRefused(str(frame.get("code") or "error"), str(frame.get("detail") or "")[:400]))
             logger.warning("hub error: %s %s", frame.get("code"), str(frame.get("detail") or "")[:200])
 
     # -- turns ------------------------------------------------------------------------
@@ -763,7 +764,7 @@ class Bridge:
         try:
             answer = await self.request({**frame, "thread": thread})
         except HubRefused as e:
-            return tl.refused(tool, e.code)
+            return tl.refused(tool, e.code, e.detail)
         except (ConnectionError, asyncio.TimeoutError):
             return dict(HUB_UNREACHABLE)
         if tool == "attachment_get":

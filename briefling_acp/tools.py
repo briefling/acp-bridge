@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import tooldefs as td
 
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.ACQUIRE_SCHEMA,
-           td.RELEASE_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
+           td.RELEASE_SCHEMA, td.ACQUIRE_ALIAS_SCHEMA, td.RELEASE_ALIAS_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
            td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA]
 # The bridge's own tool (a Hermes agent gets the files downloaded by the plugin): the bridge fetches the file itself
 # (attachments.py), the agent only names it.
@@ -134,13 +134,14 @@ def build_title(args: Dict[str, Any]) -> Built:
     return {"type": "topic.title", "title": title, **({"tags": tags} if tags else {})}, None
 
 
-def _resource(kind: str) -> Callable[[Dict[str, Any]], Built]:
+def _action(kind: str) -> Callable[[Dict[str, Any]], Built]:
+    """action.acquire / action.release; `resource` is read too for the old tool names (acquire_resource...)."""
     def build(args: Dict[str, Any]) -> Built:
-        resource = _s(args, "resource")
-        if not td.RESOURCE_RE.fullmatch(resource):
-            return None, (f"invalid resource name {resource[:60]!r}: use a name listed in the conversation context "
-                          "(e.g. 'emulator', 'stack:briefling-dev').")
-        return {"type": kind, "resource": resource}, None
+        action = _s(args, "action") or _s(args, "resource")
+        if not td.RESOURCE_RE.fullmatch(action):
+            return None, (f"invalid action name {action[:60]!r}: use a name listed in the conversation context "
+                          "(e.g. 'emulator', 'stack:briefling-prod').")
+        return {"type": kind, "action": action}, None
     return build
 
 
@@ -199,8 +200,8 @@ def build_attachment_get(args: Dict[str, Any]) -> Built:
 BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "turn_outcome": build_outcome, "propose_thread": build_propose, "propose_issue": build_issue, "propose_plan": td.build_plan,
     "ask_choices": td.build_ask_choices, "poll_vote": td.build_poll_vote,
-    "propose_space_about": build_about, "acquire_resource": _resource("resource.acquire"),
-    "release_resource": _resource("resource.release"), "pushed_commits": build_pushed, "memory_search": build_search,
+    "propose_space_about": build_about, "acquire_action": _action("action.acquire"),
+    "release_action": _action("action.release"), "acquire_resource": _action("action.acquire"), "release_resource": _action("action.release"), "pushed_commits": build_pushed, "memory_search": build_search,
     "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
     "space_threads": td.build_space_threads, "thread_read": td.build_thread_read, "space_metrics": td.build_space_metrics,
     "radar_signal": td.build_radar_signal,
@@ -212,7 +213,8 @@ assert set(BUILD) == set(NAMES)
 ERRORS = {
     "turn_outcome": td.OUTCOME_ERRORS, "propose_thread": td.PROPOSE_ERRORS, "propose_issue": td.ISSUE_ERRORS, "propose_plan": td.PLAN_ERRORS,
     "ask_choices": td.ASK_ERRORS, "poll_vote": td.POLL_VOTE_ERRORS,
-    "propose_space_about": td.ABOUT_ERRORS, "acquire_resource": td.RESOURCE_ERRORS, "release_resource": td.RESOURCE_ERRORS,
+    "propose_space_about": td.ABOUT_ERRORS, "acquire_action": td.RESOURCE_ERRORS, "release_action": td.RESOURCE_ERRORS,
+    "acquire_resource": td.RESOURCE_ERRORS, "release_resource": td.RESOURCE_ERRORS,
     "pushed_commits": td.CI_ERRORS, "memory_search": td.MEMORY_ERRORS, "memory_read": td.MEMORY_ERRORS,
     "memory_propose": td.MEMORY_ERRORS, "topic_title": td.TITLE_ERRORS,
     "space_threads": td.INTROSPECT_ERRORS, "thread_read": td.INTROSPECT_ERRORS, "space_metrics": td.INTROSPECT_ERRORS,
@@ -222,8 +224,13 @@ ERRORS = {
 }
 
 
-def refused(tool: str, code: str) -> Dict[str, Any]:
-    """The hub refused the frame (`error` with the frame's client_id as `ref`)."""
+ACTION_TOOLS = ("acquire_action", "release_action", "acquire_resource", "release_resource")
+
+
+def refused(tool: str, code: str, detail: str = "") -> Dict[str, Any]:
+    """The hub refused the frame (`error` with the frame's client_id as `ref`; `detail` of not_allowed: the allowed agents)."""
+    if tool in ACTION_TOOLS:
+        return td.action_refused(code, detail)
     return {"ok": False, "error": code, "detail": ERRORS[tool].get(code, code)}
 
 
@@ -235,22 +242,12 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return {"ok": True, "detail": "Thread marked as finished.", "memory": td.MEMORY_NUDGE}
     if tool in td.CARD_SHOWN:
         return {"ok": True, "card": answer.get("msg_id"), "detail": td.CARD_SHOWN[tool]}
-    if tool == "acquire_resource":
-        resource = frame["resource"]
-        if answer.get("granted") is True:
-            return {"ok": True, "granted": True,
-                    "detail": f"You hold {resource} until you call release_resource or your turn ends. Use it now."}
-        holder = str(answer.get("holder") or "another thread")[:120]
-        position = answer.get("position") if isinstance(answer.get("position"), int) else None
-        where = f" (you are #{position} in the queue)" if position else ""
-        return {"ok": True, "granted": False, "holder": holder, "position": position, "detail": (
-            f'{resource} is in use by thread "{holder}"{where}. Do NOT use it. Stop here: end your turn now with a '
-            f"one-line message saying what you wait for, and do NOT call turn_outcome. The hub resumes this thread "
-            f"with a new message when {resource} is yours.")}
+    if tool in ("acquire_action", "acquire_resource"):
+        return td.action_result(frame["action"], answer)
     if tool == "topic_title":
         return {"ok": True, "detail": "Title shown in the Lounge list. Nothing else to do for it."}
-    if tool == "release_resource":
-        return {"ok": True, "detail": f"{frame['resource']} released."}
+    if tool in ("release_action", "release_resource"):
+        return {"ok": True, "detail": f"{frame['action']} released."}
     if tool == "pushed_commits":
         return {"ok": True, "detail": "Recorded: listed in the thread info (CI result shown in this thread when the space "
                                       "follows it). Nothing else to do."}
