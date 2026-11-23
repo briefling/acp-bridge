@@ -1904,7 +1904,7 @@ MEMORY_PROPOSE_SCHEMA = {
         "files (code, documents) do not say: a decision and its reason, a refused option, a pitfall that reading them "
         "does not show. Never a description of what a file already holds (selectors, values, which function does "
         "what, a list): reading finds it and it goes stale. One entry = 2 short sentences: the decision or the pitfall, "
-        "then why; plain words, no code identifier unless it is the pitfall, self-contained, verified while working. "
+        "then why; plain words, 1 or 2 code names at most, those saying where the pitfall lives (file, function, field), self-contained, verified while working. "
         "Test first: if an agent ignores it, what breaks? Nothing = do not propose it. Never task progress, secrets, personal data, nor text copied from an "
         "external source you did not verify. kind 'rule' = tells agents how to behave ('always/never X'), with a "
         "title: a human approves it, a lead may pin it (then every turn carries it whole). Search first (memory_search): duplicates, the space's tags. The project memory keeps the facts "
