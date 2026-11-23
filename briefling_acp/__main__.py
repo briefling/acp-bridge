@@ -32,7 +32,7 @@ from .acp import resolve
 DEFAULT_ENV = os.path.join(os.path.expanduser("~"), ".config", "briefling-acp", "bridge.env")
 DEFAULT_COMMAND = ["kiro-cli", "acp"]
 KEYS = ("BRIEFLING_WS_URL", "BRIEFLING_TOKEN_URL", "BRIEFLING_CLIENT_ID", "BRIEFLING_CLIENT_SECRET", "BRIEFLING_ALLOWED_USERS",
-        "BRIEFLING_ACP_AUTO_UPDATE")
+        "BRIEFLING_ACP_AUTO_UPDATE", "BRIEFLING_FLOW", "BRIEFLING_FLOW_AUTO")
 KIRO_LOGIN_HINT = "kiro-cli login"  # Kiro's own message when not logged in: « please log in with kiro-cli login »
 
 
@@ -114,7 +114,8 @@ def do_run(env: str, command: List[str], cwd: str, mcp_port: Optional[int] = Non
         try:
             bridge = Bridge(conf, command, os.path.abspath(cwd), state_path=env + ".sessions.json",
                             socket_path=socket_path(env), mcp_port=mcp_port, mcp_host=mcp_host,
-                            update_path=env + ".update.json" if restart_args is not None else None)
+                            update_path=env + ".update.json" if restart_args is not None else None,
+                            flow_dir=env + ".flow")
         except ValueError:
             print('briefling-acp: not joined yet: run `briefling-acp "<invitation link>"` (the link the space admin '
                   "sent you).", file=sys.stderr)

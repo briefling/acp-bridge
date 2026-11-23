@@ -4,8 +4,9 @@ own file, so the agent reads exactly what a Hermes agent reads; the checks below
 The hub applies every gate again (turn, membership, space settings): these checks only give the agent a clear
 message before a frame is sent.
 
-Not offered: the board/flow tools (the flow engine lives in the Hermes plugin) and memory_review/memory_compact
-(turns the hub starts for a designated Hermes agent).
+The board/flow tools (board_status, board_move, board_comment, board_label, board_set, flow_switch) are not hub
+frames: the bridge runs them on its flow host (FLOW_CALLS, the plugin's flowhost.py). Not offered:
+memory_review/memory_compact (turns the hub starts for a designated Hermes agent).
 """
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -32,6 +33,8 @@ ATTACHMENT_GET_SCHEMA = {
     },
 }
 SCHEMAS.append(ATTACHMENT_GET_SCHEMA)
+SCHEMAS += [td.BOARD_STATUS_SCHEMA, td.BOARD_COMMENT_SCHEMA, td.BOARD_MOVE_SCHEMA, td.BOARD_LABEL_SCHEMA,
+            td.BOARD_SET_SCHEMA, td.FLOW_SWITCH_SCHEMA]
 NAMES = [s["name"] for s in SCHEMAS]
 
 Built = Tuple[Optional[Dict[str, Any]], Optional[str]]  # (frame without `thread`, None) or (None, message)
@@ -210,7 +213,29 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "attachment_get": build_attachment_get, "agent_card": td.build_agent_card,
     "skill_read": td.build_skill_read, "skill_propose": td.build_skill_propose,
 }
-assert set(BUILD) == set(NAMES)
+
+
+def _ref(a: Dict[str, Any]) -> str:
+    return str(a.get("ref") or "").strip()
+
+
+def _labels(x: Any) -> List[str]:
+    return [str(v).strip() for v in (x if isinstance(x, list) else []) if str(v).strip()][:20]
+
+
+# Board tools: (host, args) -> result line, run by the bridge on the flow host of the conversation's space (the
+# plugin's handlers, same arguments). flow_switch is the bridge's own (async, on its loop).
+FLOW_CALLS: Dict[str, Optional[Callable[[Any, Dict[str, Any]], str]]] = {
+    "board_status": lambda h, a: h.board_status(_ref(a), str(a.get("state") or ""), todo=str(a.get("todo") or ""),
+                                                done=str(a.get("done") or ""), note=str(a.get("note") or ""),
+                                                kind=str(a.get("kind") or ""), learned=str(a.get("learned") or "")),
+    "board_comment": lambda h, a: h.board_comment(_ref(a), str(a.get("body") or "")),
+    "board_move": lambda h, a: h.board_move(_ref(a), str(a.get("state") or ""), bool(a.get("force"))),
+    "board_set": lambda h, a: h.board_set(_ref(a), str(a.get("field") or ""), str(a.get("value") or "")),
+    "board_label": lambda h, a: h.board_label(_ref(a), _labels(a.get("add")), _labels(a.get("remove"))),
+    "flow_switch": None,
+}
+assert set(BUILD) | set(FLOW_CALLS) == set(NAMES) and not set(BUILD) & set(FLOW_CALLS)
 
 ERRORS = {
     "turn_outcome": td.OUTCOME_ERRORS, "propose_thread": td.PROPOSE_ERRORS, "propose_issue": td.ISSUE_ERRORS, "propose_plan": td.PLAN_ERRORS,

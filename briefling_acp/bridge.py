@@ -32,6 +32,7 @@ import sys
 import tempfile
 import time
 from collections import OrderedDict, deque
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 import aiohttp
@@ -41,9 +42,11 @@ from . import attachments as att
 from . import tools as tl
 from .acp import AcpAgent, AcpError
 from .join import PROTOCOL, PROTOCOL_VERSION, proxy_for
-from . import __version__, mcp_http, selfupdate
+from . import __version__, mcp_http, perms, selfupdate
 from .mcp import SOCKET_ENV, TOKEN_ENV
-from .tooldefs import HUB_UNREACHABLE, NO_TEXT, with_context
+from .tooldefs import FLOW_PREAMBLE, HUB_UNREACHABLE, NO_TEXT, with_context
+from .flowhost import FlowError, HubAnswer
+from .flowrunner import FlowGateway, FlowRunner
 
 UPDATE_IDLE_POLL_S = 5  # how often a bridge holding a new release looks for a moment with no turn
 
@@ -81,6 +84,7 @@ TOOLS_HINT = ("briefling's tools need a one-time allow rule in the agent's confi
               "allowedTools, or a `mcp` allow rule for `briefling/*` in V3 permissions); see the bridge README.")
 MCP_SERVER = "briefling"   # the MCP server's name in the agent (Kiro: tools @briefling/<tool>)
 REQUEST_TIMEOUT_S = 20.0   # the hub's answer to a tool frame (as the plugin)
+FLOW_REQUEST_S = 30.0      # a flow frame (board.read through the hub: a page of issues and their notes)
 SOCKET_LINE_MAX = 1 << 20
 
 
@@ -123,6 +127,15 @@ def prompt_text(frame: Dict[str, Any], sent: Optional[Set[str]] = None) -> str:
     head = f"[briefling {kind} \"{title}\", message from {who}]\n"
     head += att.listing(frame_files(frame), sent or set(), {k: v for k, v in poster_names(frame).items() if k})
     return head + with_context(ctx, str(msg.get("text") or ""))
+
+
+def task_text(title: str, text: str) -> str:
+    """A board task's prompt (flow): no human sent it, the flow's preamble says how it ends (the plugin's own)."""
+    return f"[briefling thread \"{str(title or '')[:200]}\", board task started by the flow]\n" + FLOW_PREAMBLE + text
+
+
+def off(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in ("0", "false", "no", "off")
 
 
 def is_briefling_tool(title: str) -> bool:
@@ -181,6 +194,9 @@ class Turn:
         self.pending_status: Optional[str] = None
         self.late: Optional[asyncio.Task] = None
         self.after_tool = False  # a tool ran since the last text: the next chunk opens a new paragraph
+        self.task = False        # a board task of the flow (no human sent it)
+        self.perm: Optional[Dict[str, str]] = None  # first refusal that blocks a task: {what, fix} (perms.py)
+        self.closed = False      # the agent itself set the task's status done / blocked during this turn
 
     def reply(self) -> str:
         notes = "\n".join(f"_{t if t == TOOLS_HINT else REFUSED.format(title=t)}_" for t in self.refused)
@@ -265,17 +281,24 @@ class Turn:
     async def on_permission(self, p: Dict[str, Any]) -> None:
         tc = p.get("toolCall") if isinstance(p.get("toolCall"), dict) else {}
         title = str(tc.get("title") or tc.get("kind") or "a tool call")[:MAX_STATUS]
+        tool = is_briefling_tool(title)
+        kind, what = perms.refused_of(p, tool)
+        if kind == "shell":   # a command's title is its command line (claude-agent-acp): only its program is shown
+            title = what
         logger.warning("permission refused in thread %s: %s", self.thread, title)
         self.refused.append(title)
-        if is_briefling_tool(title) and TOOLS_HINT not in self.refused:
+        if tool and TOOLS_HINT not in self.refused:
             self.refused.append(TOOLS_HINT)
+        if self.task and self.perm is None:   # a command, an edit or briefling's tools: the task cannot go on alone
+            if kind != "tool":
+                self.perm = {"what": what, "fix": perms.fix_line(perms.agent_of(self.bridge.command), kind, what)}
         await self.flush(force=True)
 
 
 class Bridge:
     def __init__(self, env: Dict[str, str], command: List[str], cwd: str, state_path: Optional[str] = None,
                  socket_path: Optional[str] = None, mcp_port: Optional[int] = None, mcp_host: str = "127.0.0.1",
-                 update_path: Optional[str] = None, mcp_tcp: Optional[bool] = None):
+                 update_path: Optional[str] = None, mcp_tcp: Optional[bool] = None, flow_dir: Optional[str] = None):
         self.ws_url = env.get("BRIEFLING_WS_URL", "")
         self.token_url = env.get("BRIEFLING_TOKEN_URL", "")
         self.client_id = env.get("BRIEFLING_CLIENT_ID", "")
@@ -325,6 +348,21 @@ class Bridge:
         self.mcp_host = mcp_host   # the host name the agent uses to reach it (sbx: host.docker.internal)
         self.mcp_runner: Optional[web.AppRunner] = None
         self._warned_no_http = False
+        # Flow (the plugin's flowrunner.py, by symlink): the board engine for this agent in board-driven spaces. A task
+        # = a turn in the issue thread's session, prompted by the flow (no human); its stopReason ends it, then a tick
+        # at once. flow_dir = its state (None = off); BRIEFLING_FLOW = optional settings file, BRIEFLING_FLOW_AUTO=0 =
+        # only that file's entries (no host made on the hub's `flow.pilot true`). ACP reports no cost: the caps that
+        # hold are the config's tasks per day (max_events_per_day) and runs per task, not the cost ones.
+        self.thread_space: Dict[str, str] = {}  # thread -> its space (deliver, flow task)
+        self.flow_lock = asyncio.Lock()          # the hub's flow frames, handled one at a time in arrival order
+        self.flow: Optional[FlowRunner] = None
+        if flow_dir is not None:
+            self.flow = FlowRunner(
+                FlowGateway(send=self.send, request=self._flow_request, inject=self._flow_inject,
+                            turn_running=lambda t: t in self.turns,
+                            turn_since=lambda t: self.turns[t].since // 1000 if t in self.turns else 0,
+                            connected=self.connected, running=lambda: self.running),
+                env.get("BRIEFLING_FLOW", ""), not off(env.get("BRIEFLING_FLOW_AUTO")), lambda: Path(flow_dir), name="bridge")
 
     # -- state ----------------------------------------------------------------------
 
@@ -400,6 +438,8 @@ class Bridge:
             await self.close()
             raise SystemExit(1)
         self.session = aiohttp.ClientSession()
+        if self.flow is not None:
+            self.flow.start()
         backoff = 0
         try:
             while self.running:
@@ -434,6 +474,8 @@ class Bridge:
 
     async def close(self) -> None:
         self.running = False
+        if self.flow is not None:
+            self.flow.stop()
         for t in list(self.tasks):
             t.cancel()
         await self.agent.stop()
@@ -491,9 +533,16 @@ class Bridge:
             if frame.get("denied"):
                 logger.warning("hub refused spaces: %s", ",".join(map(str, frame["denied"])))
             self.on_release(frame.get("release"))
+            if self.flow is not None:   # a new connection: nobody pilots until the hub's flow.pilot says so
+                self.flow.unpilot_all()
+                self._spawn(self._flow_frame(frame))
+        elif kind in ("flow.config", "flow.pause", "flow.wake", "flow.pilot"):
+            if self.flow is not None:
+                self._spawn(self._flow_frame(frame))
         elif kind == "release":  # pushed by the hub right after a deploy
             self.on_release(frame.get("release"))
-        elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "skill.result", "skill.proposed", "memory.proposed", "files.urls"):
+        elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "skill.result", "skill.proposed", "memory.proposed", "files.urls",
+                      "flow.result", "board.items", "board.written", "flow.switched"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():
                 fut.set_result(frame)
@@ -517,6 +566,8 @@ class Bridge:
         while len(self.seen) > DEDUP_KEEP:
             self.seen.popitem(last=False)
         author = str((msg.get("author") or {}).get("id") or "")
+        if isinstance(frame.get("space"), str) and ID_RE.match(frame["space"]):
+            self.thread_space[thread] = frame["space"]
         if author not in self.allowed:
             logger.warning("message dropped in %s: author not in BRIEFLING_ALLOWED_USERS", thread)
             return
@@ -537,20 +588,23 @@ class Bridge:
         self._save_state()
         return sid
 
-    async def run_turn(self, thread: str, frame: Dict[str, Any]) -> None:
+    async def run_turn(self, thread: str, frame: Optional[Dict[str, Any]], task: Optional[tuple] = None) -> None:
+        """One prompt turn: a human's message (`frame`), or a board task of the flow (`task` = (title, text))."""
         lock = self.locks.setdefault(thread, asyncio.Lock())
         async with lock:  # one turn at a time per conversation; a message sent meanwhile waits its turn
             turn = Turn(self, thread)
+            turn.task = task is not None
             self.turns[thread] = turn
             self.stop_by.pop(thread, None)
             await self.send({"type": "turn.started", "thread": thread, "at": self.turn_at(thread)})
             reason = "end_turn"
             try:
                 sid = await self._session_for(thread)
-                files = frame_files(frame)
+                files = frame_files(frame) if frame else []
                 blocks, sent = await att.prompt_blocks(self.session, files, self.agent.capabilities.get("promptCapabilities") or {},
                                                        self.ws_url, proxy_for) if files else ([], set())
-                reason = await self.agent.prompt(sid, prompt_text(frame, sent), turn.on_update, turn.on_permission, blocks)
+                text = task_text(*task) if task else prompt_text(frame, sent)
+                reason = await self.agent.prompt(sid, text, turn.on_update, turn.on_permission, blocks)
             except (AcpError, OSError) as e:
                 logger.warning("turn failed in %s: %s", thread, e)
                 if self.agent.stderr_tail:
@@ -574,6 +628,10 @@ class Bridge:
                 self.in_flight -= 1
                 await self.send({"type": "turn.ended", "thread": thread, "at": self.turn_at(thread),
                                  **({"stopped": True, "acted": turn.acted} if stopped else {})})
+                if self.flow is not None:   # ACP gives no usage: the flow counts tasks, never a cost
+                    if turn.perm is not None:
+                        await self._flow_blocked(thread, turn)
+                    self.flow.turn_ended(thread, self.thread_space.get(thread), task is not None, None)
 
     async def on_stop(self, frame: Dict[str, Any]) -> None:
         thread, by = frame.get("thread"), str(frame.get("by") or "")
@@ -661,6 +719,12 @@ class Bridge:
                 out["update"] = why
         if self.updated_from:
             out["updated_from"], self.updated_from = self.updated_from, None
+        if self.flow is not None:   # who briefling pilots by default (docs/design-flow.md § 14-15), as the plugin says it
+            no_uns = self.flow.no_uns()
+            if no_uns:
+                out["no_uns"] = no_uns
+            if self.flow.auto:
+                out["flow_auto"], out["uns"] = True, self.flow.uns()
         return out
 
     def on_release(self, release: Any) -> None:
@@ -734,7 +798,7 @@ class Bridge:
     async def tool_call(self, req: Dict[str, Any]) -> Dict[str, Any]:
         """One call from the MCP server: check token, turn and arguments, send the frame, shape the hub's answer."""
         tool, args, token = req.get("tool"), req.get("args"), str(req.get("token") or "")
-        if tool not in tl.BUILD or not isinstance(args, dict):
+        if (tool not in tl.BUILD and tool not in tl.FLOW_CALLS) or not isinstance(args, dict):
             return {"ok": False, "error": "bad_request", "detail": "unknown tool"}
         thread = self._thread_of(token)
         if thread is None:
@@ -746,6 +810,8 @@ class Bridge:
         turn = self.turns.get(thread)
         if turn is None:
             return {"ok": False, "error": "no_turn", "detail": "Only during a turn triggered by a trusted human in this conversation."}
+        if tool in tl.FLOW_CALLS:
+            return await self.flow_tool(thread, tool, args)
         frame, err = tl.BUILD[tool](args)
         if err:
             return {"ok": False, "error": "bad_args", "detail": err}
@@ -781,6 +847,87 @@ class Bridge:
                 "No such attachment that you may read: check the id in the list at the top of the message "
                 "(only attachments of the spaces you serve, whose member is the human of this turn).")}
         return await att.read_one(self.session, refs[0], url, proxy_for(url))
+
+    # -- flow (flowrunner.py) ------------------------------------------------------------
+
+    async def _flow_frame(self, frame: Dict[str, Any]) -> None:
+        """A hub flow frame, in arrival order (flow.config before flow.pilot at a connection)."""
+        kind = frame.get("type")
+        async with self.flow_lock:
+            if kind == "subscribed":
+                await self.flow.report_all()
+            elif kind == "flow.config":
+                await self.flow.on_config(frame)
+            elif kind == "flow.pause":
+                await self.flow.on_pause(frame)
+            elif kind == "flow.wake":
+                self.flow.on_wake(frame)
+            elif kind == "flow.pilot":
+                await self.flow.on_pilot(frame)
+
+    async def _flow_request(self, frame: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            return await self.request(frame, FLOW_REQUEST_S)
+        except HubRefused as e:
+            raise HubAnswer(e.code) from e
+
+    async def _flow_inject(self, space: str, thread: str, title: str, text: str) -> None:
+        """The task turn, in the issue thread's own ACP session (no human sent it: no author check)."""
+        self.thread_space[thread] = space
+        self.in_flight += 1
+        self._spawn(self.run_turn(thread, None, (title, text)))
+
+    async def _flow_blocked(self, thread: str, turn: Turn) -> None:
+        """A task turn met a refused permission (perms.py): the task goes blocked on the board with the cause and the
+        line to add to the agent's config, and the agent is paused, since every next task would hit the same wall.
+        The cause goes to the hub in flow.state (`perm`, Workflow); Resume in briefling clears it."""
+        host = self.flow.turns.get(thread) if self.flow is not None else None
+        ref = str((host.engine.get("current") or {}).get("ref") or "") if host is not None else ""
+        if host is None or not ref:
+            return
+        what, fix = turn.perm["what"], turn.perm["fix"]
+        text = perms.note(self.agent_label(host.fs.agent), what, fix)
+        if not turn.closed:
+            try:
+                await asyncio.to_thread(host.board_status, ref, "blocked", todo="a human: " + fix, note=text)
+            except Exception as e:   # the board is unreachable: the pause and the cause in briefling still hold
+                logger.warning("blocked status of %s not written: %s", ref, type(e).__name__)
+        now = int(time.time())
+        async with host.lock:
+            host.state["perm"] = {"at": now, "ref": ref, "what": what, "fix": fix}
+            host.engine["paused"] = {"ts": now, "by": "permission", "reason": ("refused permission: %s" % what)[:200]}
+            host.engine["alerts"] = (host.engine.get("alerts") or [])[-199:] + [{"ts": now, "ref": ref, "msg": text[:300]}]
+            host.save()
+        logger.warning("flow %s/%s paused: %s refused in %s (%s)", host.fs.space, host.fs.agent, what, ref, fix)
+        await self.flow.report(host, force=True)
+
+    @staticmethod
+    def agent_label(agent: str) -> str:
+        return agent[:1].upper() + agent[1:] if agent else "the agent"
+
+    async def flow_tool(self, thread: str, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """board_* (the host of the thread's space, in a worker thread: GitHub calls block, GitLab ones go through
+        the hub from there) and flow_switch (on this loop)."""
+        if tool == "flow_switch":
+            if self.flow is None:
+                return {"ok": False, "error": "no_flow", "detail": "this bridge runs no flow."}
+            out = await self.flow.switch(str(args.get("link") or ""))
+            return {"ok": False, "error": "refused", "detail": out["error"]} if out.get("error") else {"ok": True, **out}
+        host = self.flow.host_of_space(self.thread_space.get(thread, "")) if self.flow is not None else None
+        if host is None:
+            return {"ok": False, "error": "no_flow",
+                    "detail": f"{tool} only works in a thread of a space whose board this agent works (flow)."}
+        call = tl.FLOW_CALLS[tool]
+        try:
+            out = {"ok": True, "result": await asyncio.to_thread(call, host, args)}
+            if tool == "board_status" and args.get("state") in ("done", "blocked") and thread in self.turns:
+                self.turns[thread].closed = True
+            return out
+        except FlowError as e:
+            return {"ok": False, "error": "refused", "detail": str(e)}
+        except Exception as e:  # GitHub / hub / config errors: the agent sees the cause, never a token
+            logger.warning("%s failed: %s", tool, type(e).__name__)
+            return {"ok": False, "error": "failed", "detail": f"{tool} failed: {type(e).__name__}: {str(e)[:300]}"}
 
     async def request(self, frame: Dict[str, Any], timeout: float = REQUEST_TIMEOUT_S) -> Dict[str, Any]:
         """Send a frame with a fresh client_id and wait for the hub's answer (or its `error` with that ref)."""

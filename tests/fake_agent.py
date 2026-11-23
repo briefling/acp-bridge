@@ -169,6 +169,23 @@ def prompt(rid, p):
                                                "options": [{"optionId": "no", "name": "Deny", "kind": "reject_once"}]})
         send({"id": rid, "result": {"stopReason": "end_turn"}})
         return
+    if "board task started by the flow" in text and "PUSHME" in text:  # a flow task whose git push is refused
+        update(sid, {"sessionUpdate": "tool_call", "toolCallId": "c3", "title": "git push", "kind": "execute", "status": "pending"})
+        r = ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": "c3", "title": "`TOKEN=s3cret git push origin fix-1`",
+                "kind": "execute", "rawInput": {"command": "TOKEN=s3cret git push origin fix-1"}},
+                "options": [{"optionId": "no", "name": "Deny", "kind": "reject_once"}]})
+        chunk(sid, "push refused, stopping")
+        send({"id": rid, "result": {"stopReason": "end_turn"}})
+        return
+    if "board task started by the flow" in text:  # a flow task: works the item through the board tools, as told
+        import re
+        ref = re.search(r"\[flow\] agent=\S+ department=\S+ event=\S+ item=(\S+)", text).group(1)
+        outcome = "blocked" if "BLOCKME" in text else "done"
+        tool_lines(sid, "TOOL board_status " + json.dumps({"ref": ref, "state": "working", "todo": "fix"}) + "\n"
+                   "TOOL board_status " + json.dumps({"ref": ref, "state": outcome, "learned": "none", "kind": "bug",
+                                                      "note": "need a human"}))
+        send({"id": rid, "result": {"stopReason": "end_turn"}})
+        return
     if tool_lines(sid, text):
         send({"id": rid, "result": {"stopReason": "end_turn"}})
         return

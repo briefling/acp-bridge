@@ -69,8 +69,20 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
   asks the hub for a fresh read URL (only files of the spaces the agent serves and the turn's human sees), downloads
   it and answers with the text (first 100 KB) or the image. PDFs and archives are not readable this way. No local path
   is handed out: the agent may run where the bridge's disk is not visible.
-- **Not relayed**: questions with buttons, cost per thread, the
-  board/flow tools and the memory review turns (those need the Hermes plugin).
+- **Not relayed**: questions with buttons, cost per thread and the memory review turns (those need the Hermes plugin).
+- **Board flow**: the bridge runs the same flow host as the Hermes plugin (`flow/`, `flowhost.py`, `flowrunner.py`,
+  the plugin's files). In a board-driven space where briefling pilots the agent (by default when this machine has no
+  unstrikeable state for it), a board task (`dev:<agent>` label + Ready) becomes a turn in the issue's thread, prompted
+  by the flow; the turn's end (`stopReason`) ticks the board at once. The agent gets `board_status`, `board_move`,
+  `board_comment`, `board_label`, `board_set` and `flow_switch`. ACP reports no cost: set the caps in tasks per day
+  (`max_events_per_day`) and runs per task in Settings › Work, the cost caps never trigger. The flow state lives next
+  to the credentials (`bridge.env.flow/`); `BRIEFLING_FLOW` (settings file) and `BRIEFLING_FLOW_AUTO=0` work as for
+  the plugin. The agent must be allowed, in its own configuration, to run git push / gh / glab: the bridge refuses
+  every permission request (see **Minimal config for the board flow** below). At the first refused command, edit or
+  briefling tool of a task, the bridge sets the task's status to blocked on the board (what was refused and the line to
+  add to the agent's config), pauses the agent (every next task would hit the same wall) and reports the cause to the
+  hub: Settings › Work › Workflow shows it in red. Only the program and subcommand are named (`git push`), never the
+  command line. Fix the config, then **Resume** the agent on the Board.
 - **Kiro specifics**: `kiro-cli acp` refuses to start when not logged in; in a terminal the bridge then runs
   `kiro-cli login` once and retries, otherwise (service manager) it exits with Kiro's message.
   The bridge only uses standard ACP methods (`initialize`, `session/new|load|prompt|cancel`, `session/update`,
@@ -121,6 +133,29 @@ sandbox: `sbx policy allow network --sandbox <name> localhost:<port>` (the sandb
 `host.docker.internal` into `localhost`). Gates: loopback only, a request without a known token gets 401 (no
 « only turn running » fallback over a port), a request with an `Origin` header (a browser page) gets 403, POST only.
 An agent that does not take HTTP servers keeps getting the stdio one.
+
+## Minimal config for the board flow
+
+A board task needs, without asking: file edits in the repo, `git` (commit, push), the forge's CLI (`gh` for GitHub,
+`glab` for GitLab) and briefling's tools. Each agent decides this in its own config, never the bridge. The lines below
+come from each vendor's documentation (Nov 2026) and were not all tried live; the blocked status names the line for
+the agent that hit the wall.
+
+| Agent | File | Minimal lines |
+|---|---|---|
+| Claude Code (`claude-agent-acp`) | `~/.claude/settings.json` (or the repo's `.claude/settings.json`) | `"permissions": {"allow": ["Edit", "Bash(git *)", "Bash(gh *)", "Bash(glab *)", "mcp__briefling"]}` |
+| GitHub Copilot CLI | bridge command (the CLI options; approvals saved in `~/.copilot/permissions-config.json` are per folder) | `-- copilot --acp --stdio --allow-tool='write' --allow-tool='shell(git:*)' --allow-tool='shell(gh:*)' --allow-tool='shell(glab:*)' --allow-tool='briefling'` |
+| Qwen Code | `~/.qwen/settings.json` | `"permissions": {"allow": ["Edit", "Bash(git *)", "Bash(gh *)", "Bash(glab *)", "mcp__briefling"]}` |
+| Codex (`codex-acp`) | `~/.codex/config.toml` | `approval_policy = "never"`, `sandbox_mode = "workspace-write"`, `[sandbox_workspace_write]` `network_access = true` (push needs the network) |
+| Cursor | `~/.cursor/cli-config.json` | `"permissions": {"allow": ["Write(**)", "Shell(git)", "Shell(gh)", "Shell(glab)"]}` |
+| Gemini CLI | `~/.gemini/settings.json` | `"tools": {"allowed": ["run_shell_command(git)", "run_shell_command(gh)", "run_shell_command(glab)"]}`, plus `"mcpServers": {"briefling": {"trust": true}}` when declared there |
+| Antigravity CLI | `~/.gemini/antigravity-cli/settings.json` | `"allow": ["mcp(briefling/*)"]`, plus its shell rules for git / gh / glab |
+| opencode | `opencode.jsonc` | `"permissions": [{"action": "shell", "resource": "git *", "effect": "allow"}, {"action": "shell", "resource": "gh *", "effect": "allow"}, {"action": "shell", "resource": "glab *", "effect": "allow"}, {"action": "edit", "resource": "*", "effect": "allow"}]` |
+| Kiro CLI 2.x | `~/.kiro/agents/<agent>.json` | `"allowedTools": ["fs_write", "execute_bash", "@briefling"]`, or narrower: `"toolsSettings": {"execute_bash": {"allowedCommands": ["git .*", "gh .*", "glab .*"]}}` |
+| Kiro CLI V3 | `~/.kiro/settings/permissions.yaml` | an `mcp` rule for `briefling/*` (above) and a shell rule for git / gh / glab |
+
+The forge's own login must work too, in the agent's environment: `gh auth status` / `glab auth status`, and a git
+credential helper for the push. A blocked task names the refusal only; a failed login shows in the agent's reply.
 
 ## Tests
 

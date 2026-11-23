@@ -2773,3 +2773,67 @@ def build_applet_propose(args: Dict[str, Any]) -> "tuple[Dict[str, Any] | None, 
     if why:
         frame["why"] = why[:500]
     return frame, None
+
+
+# -- flow (board engine): the board tools and the task turn's preamble, shared with the ACP bridge's flow host ------
+FLOW_PREAMBLE = (
+    "[briefling] Board task, started by the flow (not by a human request). Work it with the board_* tools. In this "
+    "turn propose_issue, turn_outcome, acquire_action, pushed_commits and the memory tools are refused: the board "
+    "status says how the task ends. A human may answer in this thread after your turn.\n\n")
+BOARD_REF = {"type": "string", "description": "The board item, owner/repo#number (e.g. acme/app#80): one of your departments' repos."}
+BOARD_STATUS_SCHEMA = {
+    "name": "board_status",
+    "description": (
+        "Post your status on a board item: working, done or blocked. briefling flow only, in a board-driven space: written on GitHub as your one status "
+        "comment (edited in place). Call it with state='working' when you start a task, then ALWAYS end the task with "
+        "state='done' (with kind when the flow has kinds, and learned = '<rule> because <reason>' or 'none') or "
+        "state='blocked' (waiting for a human: say what in todo)."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "ref": BOARD_REF,
+        "state": {"type": "string", "enum": ["working", "done", "blocked"]},
+        "todo": {"type": "string", "description": "Next step (working) or what you need from a human (blocked)."},
+        "done": {"type": "string", "description": "What is done so far."},
+        "note": {"type": "string", "description": "Optional extra line."},
+        "kind": {"type": "string", "description": "Kind of work, required at done when the flow declares kinds."},
+        "learned": {"type": "string", "description": "Required at done: '<rule> because <reason>', or 'none'."},
+    }, "required": ["ref", "state"]},
+}
+BOARD_COMMENT_SCHEMA = {
+    "name": "board_comment",
+    "description": "Comment on a board item (GitHub issue). briefling flow only, with your own identity. Repos may be public: no secrets.",
+    "parameters": {"type": "object", "properties": {"ref": BOARD_REF, "body": {"type": "string", "description": "GitHub Markdown."}},
+                   "required": ["ref", "body"]},
+}
+BOARD_MOVE_SCHEMA = {
+    "name": "board_move",
+    "description": "Move a board item to a state of its flow. briefling flow only: the state key, e.g. 'doing', 'review'.",
+    "parameters": {"type": "object", "properties": {
+        "ref": BOARD_REF, "state": {"type": "string", "description": "State key of the flow."},
+        "force": {"type": "boolean", "description": "Move to ready/doing although blocked: only if a human said so."},
+    }, "required": ["ref", "state"]},
+}
+BOARD_SET_SCHEMA = {
+    "name": "board_set",
+    "description": "Set a single-select field of a board item. briefling flow only, e.g. field 'Size', value 'M'.",
+    "parameters": {"type": "object", "properties": {"ref": BOARD_REF, "field": {"type": "string"}, "value": {"type": "string"}},
+                   "required": ["ref", "field", "value"]},
+}
+BOARD_LABEL_SCHEMA = {
+    "name": "board_label",
+    "description": "Add or remove labels on a board item (briefling flow only). Assignment labels (role:agent) are set by humans only.",
+    "parameters": {"type": "object", "properties": {
+        "ref": BOARD_REF,
+        "add": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "array", "items": {"type": "string"}},
+    }, "required": ["ref"]},
+}
+FLOW_SWITCH_SCHEMA = {
+    "name": "flow_switch",
+    "description": (
+        "Switch your board work from unstrikeable to briefling. In a space, with the link an admin "
+        "gave you. Imports your unstrikeable state, pauses it, and briefling pilots from then on. Afterwards, remove "
+        "your uns_poll cron job."),
+    "parameters": {"type": "object", "properties": {
+        "link": {"type": "string", "description": "The whole switch link (…/agent.md?switch=…&space=…&agent=…)."},
+    }, "required": ["link"]},
+}

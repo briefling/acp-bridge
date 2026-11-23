@@ -278,7 +278,8 @@ def test_mcp_server_speaks_initialize_list_and_refuses_the_rest():
     assert got[0]["result"]["serverInfo"] == {"name": "briefling", "version": __version__}
     listed = got[1]["result"]["tools"]
     assert [t["name"] for t in listed] == tools.NAMES and all(t["inputSchema"]["type"] == "object" for t in listed)
-    assert got[2]["error"]["code"] == -32601 and got[3]["error"]["code"] == -32602, "flow tools are not offered"
+    assert got[2]["error"]["code"] == -32601
+    assert json.loads(got[3]["result"]["content"][0]["text"])["error"] == "bridge_unreachable", "board tools are offered (flow host)"
     unreachable = json.loads(got[4]["result"]["content"][0]["text"])
     assert got[4]["result"]["isError"] is True and unreachable["error"] == "bridge_unreachable"
     assert got[5]["result"]["protocolVersion"] == mcp.VERSIONS[0]
