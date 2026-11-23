@@ -376,6 +376,16 @@ def test_agent_card_shared_with_the_plugin():
     assert "max 1500" in tools.refused("agent_card", "too_long")["detail"]
 
 
+def test_skill_tools_shared_with_the_plugin():
+    assert {"skill_read", "skill_propose"} <= set(tools.NAMES)
+    assert tools.BUILD["skill_read"]({"name": "Deploy-Prod", "space": "s2"}) == ({"type": "skill.read", "name": "deploy-prod", "space": "s2"}, None)
+    ok, err = tools.BUILD["skill_propose"]({"name": "run-e2e", "description": "Run e2e", "text": "npm run e2e", "tags": ["test"], "sources": "docs/e2e.md"})
+    assert not err and ok == {"type": "skill.propose", "name": "run-e2e", "description": "Run e2e", "text": "npm run e2e", "tags": ["test"], "sources": ["docs/e2e.md"]}
+    assert tools.result("skill_propose", ok, {"id": "k", "name": "run-e2e", "status": "pending"})["status"] == "pending"
+    assert tools.result("skill_read", {"type": "skill.read", "name": "x"}, {"space": "s1", "skills": []})["skill"] is None
+    assert "skill_read without a name" in tools.refused("skill_read", "not_found")["detail"]
+
+
 def test_build_plan_shared_with_the_plugin():
     step = {"title": " S\n1 ", "brief": " B "}
     assert tools.BUILD["propose_plan"]({"title": "P", "steps": [step, step], "repo": "acme/lab"}) == (

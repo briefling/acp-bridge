@@ -493,7 +493,7 @@ class Bridge:
             self.on_release(frame.get("release"))
         elif kind == "release":  # pushed by the hub right after a deploy
             self.on_release(frame.get("release"))
-        elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "memory.proposed", "files.urls"):
+        elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "skill.result", "skill.proposed", "memory.proposed", "files.urls"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():
                 fut.set_result(frame)
