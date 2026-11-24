@@ -54,8 +54,8 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
 
 - **Who can drive the agent**: only the humans listed in `BRIEFLING_ALLOWED_USERS` (the space's trusted humans at join
   time, Cognito ids). A message or a Stop from anyone else is dropped. Someone made trusted later must be added there.
-- **Tool permissions**: by default every permission request of the agent is refused with the agent's own « reject » option, and
-  the reply says which one (« Refused (not pre-authorized...): ... »). What the agent may do unattended is decided by
+- **Tool permissions**: by default every permission request of the agent is refused with the agent's own « reject »
+  option, and the reply says which one (« Refused (not pre-authorized...): ... »). What the agent may do unattended is decided by
   its own configuration (Kiro: the allowed tools of its agent config). For human-driven turns, an operator can enable
   one-shot approval cards (below). `--trust-all-tools` is refused. The bridge advertises no file system or terminal
   capability to the agent.
@@ -79,7 +79,7 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
   `board_comment`, `board_label`, `board_set` and `flow_switch`. ACP reports no cost: set the caps in tasks per day
   (`max_events_per_day`) and runs per task in Settings › Work, the cost caps never trigger. The flow state lives next
   to the credentials (`bridge.env.flow/`); `BRIEFLING_FLOW` (settings file) and `BRIEFLING_FLOW_AUTO=0` work as for
-  the plugin.   the agent must be allowed, in its own configuration, to run git push / gh / glab: automatic tasks refuse
+  the plugin. The agent must be allowed, in its own configuration, to run git push / gh / glab: automatic tasks refuse
   every permission request (see **Minimal config for the board flow** below). At the first refused command, edit or
   briefling tool of a task, the bridge sets the task's status to blocked on the board (what was refused and the line to
   add to the agent's config), pauses the agent (every next task would hit the same wall) and reports the cause to the

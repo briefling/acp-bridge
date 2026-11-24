@@ -55,8 +55,8 @@ an approval. The bridge holds the ACP request open without blocking its other se
 board tasks still refuse permissions. The card deliberately shows only the program or tool: raw arguments and
 command chains can contain credentials and remain on the host. See [One-shot permission cards](../README.md#one-shot-permission-cards).
 
-With the default settings, if a Kiro agent keeps answering « Refused » on `ls` or `git`, retrying from the chat changes nothing. The operator
-of the Kiro host must allow those tools in the agent's config (Kiro CLI 2.x: `allowedTools` of the agent file; V3:
+With the default settings, if a Kiro agent keeps answering « Refused » on `ls` or `git`, retrying from the chat changes
+nothing. The operator of the Kiro host must allow those tools in the agent's config (Kiro CLI 2.x: `allowedTools` of the agent file; V3:
 `~/.kiro/settings/permissions.yaml`), or put the files the agent needs inside its trusted workspace. The briefling tools
 need the same one-time setup (`@briefling` / `briefling/*`, see the README).
 
