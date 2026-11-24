@@ -17,7 +17,7 @@ from . import tooldefs as td
 
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.PROPOSE_ACTION_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.ACQUIRE_ALIAS_SCHEMA, td.RELEASE_ALIAS_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
-           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA, td.AGENT_CARD_SCHEMA,
+           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_CLEAR_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA, td.AGENT_CARD_SCHEMA,
            td.SKILL_READ_SCHEMA, td.SKILL_PROPOSE_SCHEMA, td.APPLET_PROPOSE_SCHEMA, td.APPLET_LIST_SCHEMA,
            td.REMINDER_PROPOSE_SCHEMA, td.MAIL_IMPORT_SCHEMA, td.EXCHANGE_READ_SCHEMA, td.EXCHANGE_SUMMARY_SCHEMA]
 # Mail exchanges: offered only when the space's « exchanges » module is on (each one is read on every turn).
@@ -257,6 +257,7 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
     "space_threads": td.build_space_threads, "thread_read": td.build_thread_read, "space_metrics": td.build_space_metrics,
     "radar_signal": td.build_radar_signal,
+    "radar_clear": td.build_radar_clear,
     "radar_profile": td.build_radar_profile,
     "attachment_get": build_attachment_get, "agent_card": td.build_agent_card,
     "skill_read": td.build_skill_read, "skill_propose": td.build_skill_propose,
@@ -296,6 +297,7 @@ ERRORS = {
     "memory_propose": td.MEMORY_ERRORS, "topic_title": td.TITLE_ERRORS,
     "space_threads": td.INTROSPECT_ERRORS, "thread_read": td.INTROSPECT_ERRORS, "space_metrics": td.INTROSPECT_ERRORS,
     "radar_signal": td.RADAR_ERRORS,
+    "radar_clear": td.RADAR_CLEAR_ERRORS,
     "radar_profile": td.RADAR_PROFILE_ERRORS,
     "attachment_get": {**td.INTROSPECT_ERRORS, "files_off": "This hub stores no files."},
     "agent_card": td.AGENT_CARD_ERRORS,
@@ -355,6 +357,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return {"ok": True, "detail": td.POLL_VOTED}
     if tool == "radar_signal":
         return {"ok": True, "signal": answer.get("msg_id"), "detail": td.RADAR_RECORDED}
+    if tool == "radar_clear":
+        return {"ok": True, "signal": answer.get("msg_id"), "detail": td.RADAR_CLEARED}
     if tool == "memory_propose":
         return {"ok": True, "id": answer.get("id"), "status": answer.get("status"),
                 "detail": td.MEMORY_GATES.get(str(answer.get("gate") or ""), "Recorded.")}

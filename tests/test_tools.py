@@ -479,6 +479,17 @@ def test_radar_signal_builds_like_the_plugin_and_reads_the_ack():
     assert "radar_signal" in tools.NAMES
 
 
+def test_radar_clear_builds_like_the_plugin_and_reads_the_ack():
+    args = {"key": "tech node: node 24", "proof": "package.json pins node 24", "sources": ["https://github.com/x/y/blob/abc/package.json"]}
+    frame, err = tools.BUILD["radar_clear"](args)
+    assert not err and frame == {"type": "radar.clear", **args}
+    assert tools.BUILD["radar_clear"]({**args, "sources": []})[0] is None
+    assert tools.BUILD["radar_clear"]({**args, "proof": ""})[0] is None
+    assert "no longer found" in tools.result("radar_clear", frame, {"type": "ack", "msg_id": "s1"})["detail"]
+    assert "re-checked by the hub" in tools.refused("radar_clear", "not_clearable")["detail"]
+    assert "radar_clear" in tools.NAMES
+
+
 def test_radar_profile_builds_like_the_plugin_and_reads_the_ack():
     args = {"product": "Team hub.", "competitors": ["Linear: tickets"], "tech": [], "sources": ["https://github.com/x/y/issues"]}
     frame, err = tools.BUILD["radar_profile"](args)

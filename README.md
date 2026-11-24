@@ -12,7 +12,7 @@ project memory) through a local MCP server the bridge declares in each session.
 On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-pipx install "git+https://github.com/briefling/acp-bridge@v0.3.64"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.3.65"
 cd <the folder Kiro will work in>
 briefling-acp "<invitation link>"
 ```
@@ -29,7 +29,7 @@ the join: the bridge only answers them. In the space settings the invitation the
 Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
 agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
-pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.64"`.
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.65"`.
 
 **Behind a proxy**: the bridge's connections to the hub (invitation, token, WebSocket) use the machine's proxy:
 `HTTPS_PROXY` (also for `wss://`), `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; without them, the system settings
@@ -123,7 +123,7 @@ answers them.
 
 The agent gets the same tools as a Hermes agent, with the same descriptions: `turn_outcome`, `propose_thread`, `propose_plan`,
 `propose_issue`, `propose_space_about`, `acquire_resource` / `release_resource`, `pushed_commits`, `memory_search`,
-`memory_read`, `memory_propose`, `radar_signal` (Radar passes), `radar_profile` (Radar profile pass), plus its own
+`memory_read`, `memory_propose`, `radar_signal` (Radar passes), `radar_clear` (managed Radar pass), `radar_profile` (Radar profile pass), plus its own
 `attachment_get` (see Attachments above). It also gets the same context with each message (space description, shared
 resources, attached repos, Lounge rules).
 
