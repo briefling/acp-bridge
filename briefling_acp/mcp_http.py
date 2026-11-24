@@ -24,6 +24,7 @@ MAX_BODY = 1 << 20
 
 ThreadOf = Callable[[str], Optional[str]]
 ToolCall = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
+MailsOf = Callable[[str], bool]
 
 
 def _bearer(req: web.Request) -> str:
@@ -31,8 +32,9 @@ def _bearer(req: web.Request) -> str:
     return auth[7:].strip() if auth[:7].lower() == "bearer " else ""
 
 
-def app(thread_of: ThreadOf, tool_call: ToolCall) -> web.Application:
-    """The aiohttp app: thread_of(token) -> the conversation of a known token; tool_call({token, tool, args})."""
+def app(thread_of: ThreadOf, tool_call: ToolCall, mails_of: MailsOf = lambda _t: True) -> web.Application:
+    """The aiohttp app: thread_of(token) -> the conversation of a known token; tool_call({token, tool, args});
+    mails_of(token): does tools/list include the mail tools (the space's exchanges module)."""
 
     async def post(req: web.Request) -> web.StreamResponse:
         if "Origin" in req.headers:
@@ -54,7 +56,7 @@ def app(thread_of: ThreadOf, tool_call: ToolCall) -> web.Application:
         async def call(tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return await tool_call({"token": token, "tool": tool, "args": args})
 
-        out = await mcp.handle_async(msg, call)
+        out = await mcp.handle_async(msg, call, lambda: mails_of(token))
         return web.json_response({"jsonrpc": "2.0", **out})
 
     async def not_allowed(_req: web.Request) -> web.StreamResponse:

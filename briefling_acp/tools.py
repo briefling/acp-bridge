@@ -5,8 +5,10 @@ The hub applies every gate again (turn, membership, space settings): these check
 message before a frame is sent.
 
 The board/flow tools (board_status, board_move, board_comment, board_label, board_set, flow_switch) are not hub
-frames: the bridge runs them on its flow host (FLOW_CALLS, the plugin's flowhost.py). Not offered:
-memory_review/memory_compact (turns the hub starts for a designated Hermes agent).
+frames: the bridge runs them on its flow host (FLOW_CALLS, the plugin's flowhost.py). The mail tools (MAIL_TOOLS) are
+listed only in a space whose « exchanges » module is on (the hub's deliver context says `exchanges: false` otherwise).
+Not offered: memory_review/memory_compact (turns the hub starts for a designated Hermes agent), preview, voice,
+secret_totp and request_elevation (they need the Hermes plugin).
 """
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -16,7 +18,10 @@ from . import tooldefs as td
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.PROPOSE_ACTION_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.ACQUIRE_ALIAS_SCHEMA, td.RELEASE_ALIAS_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
            td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA, td.AGENT_CARD_SCHEMA,
-           td.SKILL_READ_SCHEMA, td.SKILL_PROPOSE_SCHEMA]
+           td.SKILL_READ_SCHEMA, td.SKILL_PROPOSE_SCHEMA, td.APPLET_PROPOSE_SCHEMA, td.APPLET_LIST_SCHEMA,
+           td.REMINDER_PROPOSE_SCHEMA, td.MAIL_IMPORT_SCHEMA, td.EXCHANGE_READ_SCHEMA, td.EXCHANGE_SUMMARY_SCHEMA]
+# Mail exchanges: offered only when the space's « exchanges » module is on (each one is read on every turn).
+MAIL_TOOLS = ("mail_import", "exchange_read", "exchange_summary")
 # The bridge's own tool (a Hermes agent gets the files downloaded by the plugin): the bridge fetches the file itself
 # (attachments.py), the agent only names it.
 ATTACHMENT_GET_SCHEMA = {
@@ -40,9 +45,10 @@ NAMES = [s["name"] for s in SCHEMAS]
 Built = Tuple[Optional[Dict[str, Any]], Optional[str]]  # (frame without `thread`, None) or (None, message)
 
 
-def mcp_tools() -> List[Dict[str, Any]]:
-    """The tools as MCP `tools/list` entries."""
-    return [{"name": s["name"], "description": s["description"], "inputSchema": s["parameters"]} for s in SCHEMAS]
+def mcp_tools(mails: bool = True) -> List[Dict[str, Any]]:
+    """The tools as MCP `tools/list` entries; mails=False leaves out MAIL_TOOLS (the space's exchanges module is off)."""
+    return [{"name": s["name"], "description": s["description"], "inputSchema": s["parameters"]} for s in SCHEMAS
+            if mails or s["name"] not in MAIL_TOOLS]
 
 
 def _s(args: Dict[str, Any], key: str) -> str:
@@ -194,6 +200,48 @@ def build_memory_propose(args: Dict[str, Any]) -> Built:
             **({"title": title} if title else {})}, None
 
 
+def build_applet_list(_args: Dict[str, Any]) -> Built:
+    return {"type": "applet.list"}, None
+
+
+def build_mail_import(args: Dict[str, Any]) -> Built:
+    """Checked mails, one hub frame each (`mail.import` carries ONE mail): the bridge sends them in order (`import_mails`)."""
+    mails, err = td.build_mail_import(args)
+    return (None, err) if err else ({"type": "mail.import", "mails": mails}, None)
+
+
+def build_exchange_read(args: Dict[str, Any]) -> Built:
+    xid = _s(args, "id")
+    if not xid:
+        return None, "id is required."
+    return {"type": "exchange.read", "id": xid}, None
+
+
+async def import_mails(request: Callable[[Dict[str, Any]], Any], thread: str, mails: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """mail_import: one mail.import frame per mail (each fits one WebSocket frame), per mail imported / known /
+    refused; a refusal that holds for every mail stops the run (the plugin's own loop). `request` raises like
+    Bridge.request (an exception with `code` for a hub refusal)."""
+    results: List[Dict[str, Any]] = []
+    for m in mails:
+        mid = m.get("message_id")
+        try:
+            r = await request({"type": "mail.import", "thread": thread, "mail": m})
+        except Exception as e:  # noqa: BLE001  HubRefused (bridge.py, carries `code`); anything else goes up
+            code = getattr(e, "code", None)
+            if not isinstance(code, str):
+                raise
+            if code in ("no_turn", "not_lead", "forbidden", "module_off"):  # the same for every mail: stop here
+                return {"ok": False, "error": code, "detail": td.MAIL_ERRORS.get(code, MODULE_OFF.get(code, code)), "results": results}
+            results.append({"message_id": mid, "result": "refused", "error": code, "detail": td.MAIL_ERRORS.get(code, code)})
+            continue
+        results.append({"message_id": mid, "result": r.get("result"), "exchange": r.get("exchange"), "state": r.get("state")})
+    counts = {k: sum(1 for r in results if r["result"] == k) for k in ("imported", "known", "refused")}
+    return {"ok": True, **counts, "results": results}
+
+
+MODULE_OFF = {"module_off": "The space's Exchanges module is off (an admin turns it on in its settings): tell the human instead."}
+
+
 def build_attachment_get(args: Dict[str, Any]) -> Built:
     fid = _s(args, "id")
     if not td.ID_RE.match(fid):
@@ -212,6 +260,8 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "radar_profile": td.build_radar_profile,
     "attachment_get": build_attachment_get, "agent_card": td.build_agent_card,
     "skill_read": td.build_skill_read, "skill_propose": td.build_skill_propose,
+    "applet_propose": td.build_applet_propose, "applet_list": build_applet_list, "reminder_propose": td.build_reminder_propose,
+    "mail_import": build_mail_import, "exchange_read": build_exchange_read, "exchange_summary": td.build_exchange_summary,
 }
 
 
@@ -250,6 +300,9 @@ ERRORS = {
     "attachment_get": {**td.INTROSPECT_ERRORS, "files_off": "This hub stores no files."},
     "agent_card": td.AGENT_CARD_ERRORS,
     "skill_read": td.SKILL_ERRORS, "skill_propose": td.SKILL_ERRORS,
+    "applet_propose": td.APPLET_ERRORS, "applet_list": td.APPLET_ERRORS, "reminder_propose": td.REMINDER_ERRORS,
+    "mail_import": {**MODULE_OFF, **td.MAIL_ERRORS}, "exchange_read": {**MODULE_OFF, **td.EXCHANGE_ERRORS},
+    "exchange_summary": {**MODULE_OFF, **td.EXCHANGE_ERRORS},
 }
 
 
@@ -290,6 +343,14 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return td.skill_result(frame, answer)
     if tool == "radar_profile":
         return {"ok": True, "detail": td.RADAR_PROFILE_SENT}
+    if tool == "applet_list":  # same keys as the plugin's adapter.applet_list
+        keep = ("id", "version", "name", "description", "emoji", "agent", "instruction", "fields", "leadsOnly")
+        return {"ok": True, "applets": [{k: x[k] for k in keep if k in x} for x in answer.get("applets") or [] if isinstance(x, dict)]}
+    if tool == "exchange_read":
+        return {"ok": True, "note": answer.get("note"), "exchange": answer.get("exchange"), "summary": answer.get("summary"),
+                "requests": answer.get("requests") or [], "mails": answer.get("mails") or []}
+    if tool == "exchange_summary":
+        return {"ok": True, "detail": "Summary recorded. Go on with the next exchange of the run; post nothing."}
     if tool == "poll_vote":
         return {"ok": True, "detail": td.POLL_VOTED}
     if tool == "radar_signal":

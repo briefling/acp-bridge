@@ -45,7 +45,7 @@ from .acp import AcpAgent, AcpError, allow_once_option
 from .join import PROTOCOL, PROTOCOL_VERSION, proxy_for
 from . import __version__, mcp_http, perms, selfupdate
 from .mcp import SOCKET_ENV, TOKEN_ENV
-from .tooldefs import FLOW_PREAMBLE, HUB_UNREACHABLE, NO_TEXT, with_context
+from .tooldefs import FLOW_PREAMBLE, HUB_UNREACHABLE, NO_TEXT, reply_hint, with_context
 from .flowhost import FlowError, HubAnswer
 from .flowrunner import FlowGateway, FlowRunner
 
@@ -129,7 +129,7 @@ def prompt_text(frame: Dict[str, Any], sent: Optional[Set[str]] = None) -> str:
     who = str(frame.get("author_name") or "a human")[:100]
     head = f"[briefling {kind} \"{title}\", message from {who}]\n"
     head += att.listing(frame_files(frame), sent or set(), {k: v for k, v in poster_names(frame).items() if k})
-    return head + with_context(ctx, str(msg.get("text") or ""))
+    return head + with_context(ctx, reply_hint(msg) + str(msg.get("text") or ""))
 
 
 def task_text(title: str, text: str) -> str:
@@ -372,6 +372,7 @@ class Bridge:
         # only that file's entries (no host made on the hub's `flow.pilot true`). ACP reports no cost: the caps that
         # hold are the config's tasks per day (max_events_per_day) and runs per task, not the cost ones.
         self.thread_space: Dict[str, str] = {}  # thread -> its space (deliver, flow task)
+        self.mails_off: Set[str] = set()        # threads whose space has the « exchanges » module off (deliver context)
         self.flow_lock = asyncio.Lock()          # the hub's flow frames, handled one at a time in arrival order
         self.flow: Optional[FlowRunner] = None
         if flow_dir is not None:
@@ -562,7 +563,7 @@ class Bridge:
         elif kind == "release":  # pushed by the hub right after a deploy
             self.on_release(frame.get("release"))
         elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "skill.result", "skill.proposed", "memory.proposed", "files.urls",
-                      "flow.result", "board.items", "board.written", "flow.switched"):
+                      "flow.result", "board.items", "board.written", "flow.switched", "applet.list", "mail.imported", "exchange.read"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():
                 fut.set_result(frame)
@@ -591,6 +592,11 @@ class Bridge:
         author = str((msg.get("author") or {}).get("id") or "")
         if isinstance(frame.get("space"), str) and ID_RE.match(frame["space"]):
             self.thread_space[thread] = frame["space"]
+        ctx = frame.get("context") if isinstance(frame.get("context"), dict) else {}
+        if ctx.get("exchanges") is False:  # the space's « exchanges » module is off: no mail tools listed
+            self.mails_off.add(thread)
+        else:
+            self.mails_off.discard(thread)
         if author not in self.allowed:
             logger.warning("message dropped in %s: author not in BRIEFLING_ALLOWED_USERS", thread)
             return
@@ -847,7 +853,8 @@ class Bridge:
         """The HTTP MCP server (`--mcp-port`): loopback only, whatever the host name the agent is given."""
         if self.mcp_port is None:
             return
-        runner = web.AppRunner(mcp_http.app(lambda tok: self.tokens.get(tok), self.tool_call), access_log=None)
+        runner = web.AppRunner(mcp_http.app(lambda tok: self.tokens.get(tok), self.tool_call,
+                                            lambda tok: self.mails_on(self.tokens.get(tok))), access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", self.mcp_port)
         try:
@@ -871,6 +878,8 @@ class Bridge:
                 res = {"ok": False, "error": "bad_request"}
             elif self.socket_key and not secrets.compare_digest(str(req.get("key") or ""), self.socket_key):
                 res = {"ok": False, "error": "forbidden", "detail": "wrong bridge key"}
+            elif req.get("list") is True:  # tools/list of the stdio server: which optional tools this conversation gets
+                res = {"ok": True, "mails": self.mails_on(self._thread_of(str(req.get("token") or "")))}
             else:
                 res = await self.tool_call(req)
             writer.write((json.dumps(res, ensure_ascii=False) + "\n").encode())
@@ -879,6 +888,10 @@ class Bridge:
             pass
         finally:
             writer.close()
+
+    def mails_on(self, thread: Optional[str]) -> bool:
+        """The mail tools for this conversation: unless its last deliver said the space's exchanges module is off."""
+        return thread is None or thread not in self.mails_off
 
     def _thread_of(self, token: str) -> Optional[str]:
         if token:
@@ -919,6 +932,11 @@ class Bridge:
             if text or frame["outcome"] == "waiting":
                 await turn.flush(force=True)  # the human sees the answer before the banner
         logger.info("tool %s in %s", tool, thread)
+        if tool == "mail_import":  # one mail.import frame per mail, like the plugin
+            try:
+                return await tl.import_mails(self.request, thread, frame["mails"])
+            except (ConnectionError, asyncio.TimeoutError):
+                return dict(HUB_UNREACHABLE)
         try:
             answer = await self.request({**frame, "thread": thread})
         except HubRefused as e:

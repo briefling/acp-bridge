@@ -27,7 +27,17 @@ SOCKET_ENV, TOKEN_ENV = "BRIEFLING_ACP_SOCKET", "BRIEFLING_ACP_TOKEN"
 
 def call_bridge(path: str, token: str, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """One tool call to the bridge: {ok, ...} as the bridge returns it, or a local failure."""
-    req: Dict[str, Any] = {"token": token, "tool": tool, "args": args}
+    return _ask_bridge(path, {"token": token, "tool": tool, "args": args})
+
+
+def mails_of(path: str, token: str) -> bool:
+    """Does this conversation get the mail tools (its space's « exchanges » module)? Asked to the bridge at tools/list;
+    an older bridge or none reachable: yes (the hub refuses them all the same when the module is off)."""
+    res = _ask_bridge(path, {"token": token, "list": True})
+    return res.get("mails") is not False
+
+
+def _ask_bridge(path: str, req: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if os.path.isfile(path):  # the bridge's TCP endpoint (Windows): a Unix socket is not a regular file
             with open(path) as f:
@@ -52,8 +62,10 @@ def call_bridge(path: str, token: str, tool: str, args: Dict[str, Any]) -> Dict[
                 "detail": f"the briefling bridge is not reachable ({type(e).__name__}): is `briefling-acp` running?"}
 
 
-def _route(msg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[str, Dict[str, Any]]]]:
-    """(answer, None), or (None, (tool, args)) for a valid tools/call; (None, None) for a notification."""
+def _route(msg: Dict[str, Any], mails: Callable[[], bool] = lambda: True
+           ) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[str, Dict[str, Any]]]]:
+    """(answer, None), or (None, (tool, args)) for a valid tools/call; (None, None) for a notification. mails(): does
+    tools/list include the mail tools (asked only for tools/list)."""
     method, rid = msg.get("method"), msg.get("id")
     if rid is None:
         return None, None  # notifications/initialized, notifications/cancelled...
@@ -69,7 +81,7 @@ def _route(msg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Tupl
     if method == "ping":
         return {"id": rid, "result": {}}, None
     if method == "tools/list":
-        return {"id": rid, "result": {"tools": mcp_tools()}}, None
+        return {"id": rid, "result": {"tools": mcp_tools(mails())}}, None
     if method == "tools/call":
         name, args = params.get("name"), params.get("arguments")
         if not isinstance(name, str) or name not in {t["name"] for t in mcp_tools()}:
@@ -87,16 +99,16 @@ def _call_result(rid: Any, res: Dict[str, Any]) -> Dict[str, Any]:
 
 def handle(msg: Dict[str, Any], path: str, token: str) -> Optional[Dict[str, Any]]:
     """The JSON-RPC answer to one message (None for a notification); a tool call goes to the bridge's socket."""
-    out, call = _route(msg)
+    out, call = _route(msg, lambda: mails_of(path, token))
     if call is None:
         return out
     return _call_result(msg.get("id"), call_bridge(path, token, *call))
 
 
-async def handle_async(msg: Dict[str, Any], call: Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
-                       ) -> Optional[Dict[str, Any]]:
+async def handle_async(msg: Dict[str, Any], call: Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]],
+                       mails: Callable[[], bool] = lambda: True) -> Optional[Dict[str, Any]]:
     """Same answers as `handle`, a tool call going to `call(tool, args)` (the HTTP server, inside the bridge)."""
-    out, c = _route(msg)
+    out, c = _route(msg, mails)
     if c is None:
         return out
     return _call_result(msg.get("id"), await call(*c))

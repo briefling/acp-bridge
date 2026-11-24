@@ -12,7 +12,7 @@ project memory) through a local MCP server the bridge declares in each session.
 On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-pipx install "git+https://github.com/briefling/acp-bridge@v0.3.61"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.3.64"
 cd <the folder Kiro will work in>
 briefling-acp "<invitation link>"
 ```
@@ -29,7 +29,7 @@ the join: the bridge only answers them. In the space settings the invitation the
 Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
 agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
-pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.61"`.
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.64"`.
 
 **Behind a proxy**: the bridge's connections to the hub (invitation, token, WebSocket) use the machine's proxy:
 `HTTPS_PROXY` (also for `wss://`), `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; without them, the system settings
@@ -70,8 +70,14 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
   asks the hub for a fresh read URL (only files of the spaces the agent serves and the turn's human sees), downloads
   it and answers with the text (first 100 KB) or the image. PDFs and archives are not readable this way. No local path
   is handed out: the agent may run where the bridge's disk is not visible.
-- **Not relayed**: general agent questions with buttons (apart from permission cards), cost per thread and the memory
-  review turns (those need the Hermes plugin).
+- **Cards and mails**: the agent can propose an applet (`applet_propose`, after `applet_list` to update one) and a
+  reminder (`reminder_propose`, a one-shot date/time card a member adds), as a Hermes agent does. The mail tools
+  (`mail_import` in a lead's turn, `exchange_read` / `exchange_summary` in the hidden summary run) are listed only in
+  a space whose Exchanges module is on (the hub's deliver says `exchanges: false` otherwise), so they cost nothing
+  elsewhere.
+- **Not relayed**: general agent questions with buttons (apart from permission cards), cost per thread, the memory
+  review turns, preview sharing, the voice channel, `secret_totp` and `request_elevation` (those need the Hermes
+  plugin).
 - **Board flow**: the bridge runs the same flow host as the Hermes plugin (`flow/`, `flowhost.py`, `flowrunner.py`,
   the plugin's files). In a board-driven space where briefling pilots the agent (by default when this machine has no
   unstrikeable state for it), a board task (`dev:<agent>` label + Ready) becomes a turn in the issue's thread, prompted
@@ -161,14 +167,37 @@ An agent that does not take HTTP servers keeps getting the stdio one.
 ## Minimal config for the board flow
 
 A board task needs, without asking: file edits in the repo, `git` (commit, push), the forge's CLI (`gh` for GitHub,
-`glab` for GitLab) and briefling's tools. Each agent decides this in its own config, never the bridge. The lines below
+`glab` for GitLab) and briefling's tools. Each agent decides this in its own config, never the bridge.
+
+**Launched by `npx briefling` (standalone server)**: it is done for you, the agent may then edit files, run any command
+and call briefling's tools without asking (`hub/src/agentallow.ts`; `BRIEFLING_AGENT_ALLOW=0` on the server turns it
+off). Per agent:
+
+| Agent | How |
+|---|---|
+| GitHub Copilot CLI | launch options `--allow-tool=shell --allow-tool=write --allow-tool=briefling` |
+| Qwen Code | launch option `--allowed-tools=Edit,Bash,mcp__briefling` |
+| Codex (`codex-acp`) | env `INITIAL_AGENT_MODE=agent-full-access` (kept when you set it yourself) |
+| Claude Code | merged once into `~/.claude/settings.json` `permissions.allow`: `Edit`, `Write`, `Bash`, `mcp__briefling` |
+| Cursor | merged once into `~/.cursor/cli-config.json` `permissions.allow`: `Write(**)`, `Shell(*)`, `Mcp(briefling:*)` |
+| Antigravity CLI | merged once into `~/.gemini/antigravity-cli/settings.json` `permissions.allow`: `write_file(*)`, `command(*)`, `mcp(briefling/*)` |
+| Gemini CLI | its own policy file `~/.gemini/policies/briefling.toml` (write_file, replace, run_shell_command, MCP server `briefling`) |
+| Kiro CLI V3 | `~/.kiro/settings/permissions.yaml` when absent (fs_write, shell, mcp `briefling/*`); an existing file is left as it is |
+| others (Hermes, opencode, goose, maki, pi, vibe) | nothing: their own settings (table below) |
+
+« Merged once »: only the missing entries are added, every other key is kept, the previous file is copied to
+`<file>.briefling-bak`, and it happens at the first launch of that agent only (marker `<agent>.allowed` in the server's
+`agents/` folder): a rule you remove afterwards is not put back. A file that is not plain JSON (comments) is left
+untouched; the server's log names what to add. Kiro CLI 2.x reads `~/.kiro/agents/<agent>.json`, not touched: see below.
+
+By hand (an agent you run yourself with `briefling-acp`): The lines below
 come from each vendor's documentation (Nov 2026) and were not all tried live; the blocked status names the line for
 the agent that hit the wall.
 
 | Agent | File | Minimal lines |
 |---|---|---|
 | Claude Code (`claude-agent-acp`) | `~/.claude/settings.json` (or the repo's `.claude/settings.json`) | `"permissions": {"allow": ["Edit", "Bash(git *)", "Bash(gh *)", "Bash(glab *)", "mcp__briefling"]}` |
-| GitHub Copilot CLI | bridge command (the CLI options; approvals saved in `~/.copilot/permissions-config.json` are per folder) | `-- copilot --acp --stdio --allow-tool='write' --allow-tool='shell(git:*)' --allow-tool='shell(gh:*)' --allow-tool='shell(glab:*)' --allow-tool='briefling'` |
+| GitHub Copilot CLI | bridge command (the CLI options; approvals saved in `~/.copilot/permissions-config.json` are per folder) | `-- copilot --acp --stdio --allow-tool='write' --allow-tool='shell(git:*)' --allow-tool='shell(gh:*)' --allow-tool='shell(glab:*)' --allow-tool='briefling'` (or `--allow-tool=shell` for any command) |
 | Qwen Code | `~/.qwen/settings.json` | `"permissions": {"allow": ["Edit", "Bash(git *)", "Bash(gh *)", "Bash(glab *)", "mcp__briefling"]}` |
 | Codex (`codex-acp`) | `~/.codex/config.toml` | `approval_policy = "never"`, `sandbox_mode = "workspace-write"`, `[sandbox_workspace_write]` `network_access = true` (push needs the network) |
 | Cursor | `~/.cursor/cli-config.json` | `"permissions": {"allow": ["Write(**)", "Shell(git)", "Shell(gh)", "Shell(glab)"]}` |
