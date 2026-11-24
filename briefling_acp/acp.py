@@ -5,9 +5,8 @@ stdin/stdout. Only the standard methods are used: initialize, session/new, sessi
 session/cancel; agent -> client: session/update (routed to the turn of that session) and session/request_permission.
 
 Security: the client advertises no file system and no terminal capability, so the agent has no reason to ask this
-process to read, write or run anything; any such request is refused (-32601). A permission request is ALWAYS answered
-with the agent's own reject option (or `cancelled` when it offers none): what the agent may do unattended is decided
-by its own configuration (Kiro: the agent config's allowed tools), never by the bridge. Never `--trust-all-tools`.
+process to read, write or run anything; any such request is refused (-32601). Permissions default to the agent's
+reject option. A turn's callback may select an offered allow_once option after a human approval; never allow_always.
 """
 
 import asyncio
@@ -44,7 +43,18 @@ class AcpError(Exception):
 
 
 Update = Callable[[Dict[str, Any]], Awaitable[None]]
-Permission = Callable[[Dict[str, Any]], Awaitable[None]]
+Permission = Callable[[Dict[str, Any]], Awaitable[Optional[str]]]
+
+
+def allow_once_option(options: Any) -> Optional[str]:
+    """Only an unambiguous, nonempty allow_once id may be selected by a human."""
+    opts = [o for o in options if isinstance(o, dict)] if isinstance(options, list) else []
+    for o in opts:
+        oid = o.get("optionId")
+        if (o.get("kind") == "allow_once" and isinstance(oid, str) and oid
+                and sum(other.get("optionId") == oid for other in opts) == 1):
+            return oid
+    return None
 
 
 def reject_option(options: Any) -> Dict[str, Any]:
@@ -71,6 +81,7 @@ class AcpAgent:
         self._pending: Dict[int, asyncio.Future] = {}
         self._updates: Dict[str, Update] = {}
         self._permissions: Dict[str, Permission] = {}
+        self._permission_tasks: Dict[asyncio.Task, str] = {}
         self._reader: Optional[asyncio.Task] = None
         self._stderr: Optional[asyncio.Task] = None
         self.stderr_tail = ""
@@ -102,6 +113,7 @@ class AcpAgent:
             logger.info("acp agent started: %s %s", self.info.get("name", "?"), self.info.get("version", ""))
 
     async def stop(self) -> None:
+        await self._cancel_permissions()
         if self.proc and self.proc.returncode is None:
             if WINDOWS:  # a .cmd runs the agent under cmd.exe: terminating cmd.exe alone would leave the agent running
                 try:
@@ -119,9 +131,14 @@ class AcpAgent:
                 await asyncio.wait_for(self.proc.wait(), 5)
             except asyncio.TimeoutError:
                 self.proc.kill()
+                await self.proc.wait()
+        self._fail_pending("the agent process stopped")
         for t in (self._reader, self._stderr):
             if t:
                 t.cancel()
+        readers = [t for t in (self._reader, self._stderr) if t]
+        if readers:
+            await asyncio.gather(*readers, return_exceptions=True)
 
     # -- JSON-RPC ---------------------------------------------------------------
 
@@ -150,6 +167,8 @@ class AcpAgent:
         await self._write({"method": method, "params": params})
 
     def _fail_pending(self, why: str) -> None:
+        for task in self._permission_tasks:
+            task.cancel()
         for fut in self._pending.values():
             if not fut.done():
                 fut.set_exception(AcpError(why))
@@ -181,7 +200,8 @@ class AcpAgent:
             await proc.wait()
             await asyncio.sleep(0)  # let the stderr reader drain
             logger.warning("acp agent exited (code %s)", proc.returncode)
-            self._fail_pending(f"the agent process exited (code {proc.returncode})")
+            if self.proc is proc:
+                self._fail_pending(f"the agent process exited (code {proc.returncode})")
 
     async def _dispatch(self, msg: Dict[str, Any]) -> None:
         method, rid = msg.get("method"), msg.get("id")
@@ -207,12 +227,37 @@ class AcpAgent:
             return
         if method == "session/request_permission":
             cb = self._permissions.get(sid) if isinstance(sid, str) else None
-            if cb:
-                await cb(params)
-            await self._write({"id": rid, "result": reject_option(params.get("options"))})
+            task = asyncio.create_task(self._answer_permission(rid, params, cb, self.proc))
+            self._permission_tasks[task] = sid
+            task.add_done_callback(self._permission_tasks.pop)
             return
         # fs/*, terminal/* (not advertised), extensions: refused
         await self._write({"id": rid, "error": {"code": -32601, "message": f"{method} is not supported by this client"}})
+
+    async def _answer_permission(self, rid: Any, params: Dict[str, Any], cb: Optional[Permission],
+                                 proc: Optional[asyncio.subprocess.Process]) -> None:
+        result = reject_option(params.get("options"))
+        once = allow_once_option(params.get("options"))
+        try:
+            selected = await cb(params) if cb else None
+            if once is not None and selected == once:
+                result = {"outcome": {"outcome": "selected", "optionId": once}}
+        except asyncio.CancelledError:
+            pass  # Stop or end of turn: answer with the original reject option.
+        except Exception as e:
+            logger.warning("permission callback failed: %s", type(e).__name__)
+        if self.proc is proc and self.alive:
+            try:
+                await self._write({"id": rid, "result": result})
+            except AcpError:
+                logger.warning("agent disconnected before its permission answer")
+
+    async def _cancel_permissions(self, sid: Optional[str] = None) -> None:
+        tasks = [t for t, session in self._permission_tasks.items() if sid is None or session == sid]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # -- sessions -----------------------------------------------------------------
 
@@ -242,12 +287,14 @@ class AcpAgent:
         try:
             res = await self.request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": text}, *(blocks or [])]})
         finally:
+            await self._cancel_permissions(sid)
             self._updates.pop(sid, None)
             self._permissions.pop(sid, None)
         reason = res.get("stopReason") if isinstance(res, dict) else None
         return reason if isinstance(reason, str) else "end_turn"
 
     async def cancel(self, sid: str) -> None:
+        await self._cancel_permissions(sid)
         try:
             await self.notify("session/cancel", {"sessionId": sid})
         except AcpError:

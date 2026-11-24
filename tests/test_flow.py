@@ -131,7 +131,9 @@ async def test_refused_push_blocks_the_task_with_the_cause_and_pauses_the_agent(
     it = item(8)
     it["title"] = "PUSHME"
     async with flowing(tmp_path, [it]) as (_, bridge, board):
+        bridge.approvals_enabled = True
         await until(lambda: any((f["state"].get("perm") for f in board.of("flow.state"))))
+        assert not board.of("ask"), "automatic tasks never wait for an interactive approval"
         note = [f["body"] for f in board.of("board.write") if f["op"] == "status"][-1]
         assert "waiting for a human" in note and "`git push`" in note and "s3cret" not in note, note
         assert "allow `git push`" in note, "fake agent: the generic line (no known agent)"

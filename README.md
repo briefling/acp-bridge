@@ -54,10 +54,11 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
 
 - **Who can drive the agent**: only the humans listed in `BRIEFLING_ALLOWED_USERS` (the space's trusted humans at join
   time, Cognito ids). A message or a Stop from anyone else is dropped. Someone made trusted later must be added there.
-- **Tool permissions**: every permission request of the agent is refused with the agent's own « reject » option, and
-  the reply says which one (« Refused (not pre-authorized...): ... »). What the agent may do unattended is decided by
-  its own configuration (Kiro: the allowed tools of its agent config), never by the bridge. `--trust-all-tools` is
-  refused. The bridge advertises no file system or terminal capability to the agent.
+- **Tool permissions**: by default every permission request of the agent is refused with the agent's own « reject »
+  option, and the reply says which one (« Refused (not pre-authorized...): ... »). What the agent may do unattended is decided by
+  its own configuration (Kiro: the allowed tools of its agent config). For human-driven turns, an operator can enable
+  one-shot approval cards (below). `--trust-all-tools` is refused. The bridge advertises no file system or terminal
+  capability to the agent.
 - **Stop button**: cancels the running turn (`session/cancel`).
 - **One turn at a time per conversation**: a message sent during a turn is handled after it.
 - **Sessions**: one per conversation, kept across restarts in `<env file>.sessions.json` (resumed with `session/load`
@@ -69,7 +70,8 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
   asks the hub for a fresh read URL (only files of the spaces the agent serves and the turn's human sees), downloads
   it and answers with the text (first 100 KB) or the image. PDFs and archives are not readable this way. No local path
   is handed out: the agent may run where the bridge's disk is not visible.
-- **Not relayed**: questions with buttons, cost per thread and the memory review turns (those need the Hermes plugin).
+- **Not relayed**: general agent questions with buttons (apart from permission cards), cost per thread and the memory
+  review turns (those need the Hermes plugin).
 - **Board flow**: the bridge runs the same flow host as the Hermes plugin (`flow/`, `flowhost.py`, `flowrunner.py`,
   the plugin's files). In a board-driven space where briefling pilots the agent (by default when this machine has no
   unstrikeable state for it), a board task (`dev:<agent>` label + Ready) becomes a turn in the issue's thread, prompted
@@ -77,7 +79,7 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
   `board_comment`, `board_label`, `board_set` and `flow_switch`. ACP reports no cost: set the caps in tasks per day
   (`max_events_per_day`) and runs per task in Settings › Work, the cost caps never trigger. The flow state lives next
   to the credentials (`bridge.env.flow/`); `BRIEFLING_FLOW` (settings file) and `BRIEFLING_FLOW_AUTO=0` work as for
-  the plugin. The agent must be allowed, in its own configuration, to run git push / gh / glab: the bridge refuses
+  the plugin. The agent must be allowed, in its own configuration, to run git push / gh / glab: automatic tasks refuse
   every permission request (see **Minimal config for the board flow** below). At the first refused command, edit or
   briefling tool of a task, the bridge sets the task's status to blocked on the board (what was refused and the line to
   add to the agent's config), pauses the agent (every next task would hit the same wall) and reports the cause to the
@@ -88,6 +90,28 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
   The bridge only uses standard ACP methods (`initialize`, `session/new|load|prompt|cancel`, `session/update`,
   `session/request_permission`), which Kiro documents for its default engine and for `--agent-engine=v3`; none of the
   Kiro-specific extensions.
+
+## One-shot permission cards
+
+On by default since 0.3.63; turn it off with `BRIEFLING_ACP_APPROVALS=0` in the bridge's environment or credentials
+file, then restart it (every permission request is then refused, as before). No agent configuration or permanent
+permission is changed.
+
+During a trusted human's turn, an ACP permission request that offers `allow_once` becomes a briefling approval card
+with **Approve** (this call only) and **Deny**. The bridge creates the card directly: it still works when the agent
+has not pre-authorized briefling's MCP tools. A trusted human's answer to that exact card resumes the suspended ACP
+request in its original session; it does not start a new prompt. Other conversations continue while it waits.
+
+Only the tool or program is shown, never raw arguments, command chains, output or file contents: those can contain
+credentials. This summary is not the full action. Review the action on the agent host before approving if unsure;
+approval covers the entire pending call, not just its displayed program.
+
+Requests expire after five minutes. **Deny**, any other answer, a new chat message in the conversation, Stop, hub
+disconnection, session replacement or bridge/agent restart cannot grant permission. Approvals are held in memory
+only; expired or replayed card answers never start another turn. `allow_always` is never selected. Automatic board
+tasks retain the existing refusal/block/pause behavior; pre-authorize their tools as below. The space's command
+approval mode (Settings › Agents: agent, always, contributor) does not apply to these cards: only a trusted human
+answers them.
 
 ## briefling's tools
 
@@ -104,8 +128,8 @@ that directory of the user's profile),
 with a random token per conversation: a call only counts in its own conversation, while a turn of a trusted human
 runs there. The hub checks everything again (turn, membership, space settings). Nothing listens on the network.
 
-**One-time setup in Kiro**: like any tool, these calls ask for a permission, and the bridge refuses every permission
-request. Allow them once in Kiro's config (the reply says so when they are refused):
+**One-time setup in Kiro**: like any tool, these calls ask for a permission, refused by default. To run unattended
+without an approval card on each call, allow them in Kiro's config (the reply says so when they are refused):
 
 - Kiro CLI 2.x: add `"@briefling"` to `allowedTools` of the agent you run (`kiro-cli acp --agent <name>`, file
   `~/.kiro/agents/<name>.json`).

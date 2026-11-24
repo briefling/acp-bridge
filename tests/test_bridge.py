@@ -15,7 +15,7 @@ from aiohttp import web
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from briefling_acp import __main__ as cli  # noqa: E402
-from briefling_acp.acp import reject_option  # noqa: E402
+from briefling_acp.acp import allow_once_option, reject_option  # noqa: E402
 from briefling_acp import bridge as bridge_mod  # noqa: E402
 from briefling_acp.bridge import Bridge, prompt_text  # noqa: E402
 
@@ -117,6 +117,18 @@ def finals(frames):
     return [f for f in frames if f["type"] == "message.final"]
 
 
+def approval_answer(card, option="Approve", **kw):
+    frame = deliver(card["thread"], option, **kw)
+    frame["message"].update({"type": "answer", "ask": {"id": card["ask_id"], "options": []}})
+    return frame
+
+
+async def permission_card(hub, bridge, thread="t1", mid="permission"):
+    bridge.approvals_enabled = True
+    await hub.push(deliver(thread, "PERMISSION", mid=mid))
+    return await hub.next(lambda f: f["type"] == "ask")
+
+
 async def test_turn_streams_one_message_and_reuses_the_session(env, monkeypatch):
     hub, bridge = env
     await hub.push(deliver("t1", "hello there"))
@@ -156,12 +168,159 @@ async def test_untrusted_author_and_duplicates_are_dropped(env):
         await hub.next(timeout=1.0)
 
 
+def test_approval_cards_are_on_by_default_and_off_with_zero(tmp_path):
+    conf = {"BRIEFLING_WS_URL": "ws://x/ws", "BRIEFLING_TOKEN_URL": "http://x/token", "BRIEFLING_CLIENT_ID": "c",
+            "BRIEFLING_CLIENT_SECRET": "s", "BRIEFLING_ALLOWED_USERS": "u"}
+    assert Bridge(conf, FAKE, str(tmp_path)).approvals_enabled is True
+    for off in ("0", "false", "no", "OFF"):
+        assert Bridge({**conf, "BRIEFLING_ACP_APPROVALS": off}, FAKE, str(tmp_path)).approvals_enabled is False
+
+
 async def test_permission_is_always_rejected_with_the_agents_own_option(env):
-    hub, _ = env
+    hub, bridge = env
+    bridge.approvals_enabled = False  # BRIEFLING_ACP_APPROVALS=0
     await hub.push(deliver("t1", "please PERMISSION"))
     text = finals(await hub.collect_turn("t1"))[-1]["text"]
     assert 'permission answer: {"outcome": {"optionId": "no", "outcome": "selected"}}' in text
     assert "Refused (not pre-authorized in the agent's own configuration): Run rm -rf build" in text
+
+
+@pytest.mark.parametrize("option,selected", [("Approve", "ok"), ("Deny", "no"), ("Always", "no"), ("yes", "no")])
+async def test_permission_card_answers_the_pending_request_once(env, option, selected):
+    hub, bridge = env
+    card = await permission_card(hub, bridge)
+    assert card["options"] == ["Approve", "Deny"]
+    assert "once" in card["q"] and "command chains stay on the agent host" in card["q"]
+    await hub.push(approval_answer(card, option, mid="answer"))
+    frames = await hub.collect_turn("t1")
+    assert f'permission answer: {{"outcome": {{"optionId": "{selected}", "outcome": "selected"}}}}' in finals(frames)[-1]["text"]
+    assert any(f.get("msg_id") == card["ask_id"] for f in frames), "the card is closed as a plain message"
+    assert not bridge.approvals
+    assert not bridge.agent._permission_tasks
+    await hub.push(approval_answer(card, mid="late"))
+    with pytest.raises(TimeoutError):
+        await hub.next(timeout=0.1)
+    again = await permission_card(hub, bridge, mid="second-permission")
+    assert again["ask_id"] != card["ask_id"], "an approval never authorizes the next request"
+    await hub.push(approval_answer(again, "Deny", mid="second-answer"))
+    await hub.collect_turn("t1")
+
+
+async def test_permission_answer_requires_the_card_thread_and_a_trusted_human(env):
+    hub, bridge = env
+    card = await permission_card(hub, bridge)
+    await hub.push(approval_answer(card, author=OTHER, mid="untrusted"))
+    forged = approval_answer(card, mid="agent")
+    forged["message"]["author"]["kind"] = "agent"
+    await hub.push(forged)
+    edited = approval_answer(card, mid="edit")
+    edited["message"]["edited"] = 2
+    await hub.push(edited)
+    wrong = approval_answer(card, mid="wrong-thread")
+    wrong["thread"] = wrong["message"]["thread"] = "other"
+    await hub.push(wrong)
+    foreign = {**card, "ask_id": bridge_mod.PERMISSION_PREFIX + "foreign"}
+    await hub.push(approval_answer(foreign, mid="foreign"))
+    with pytest.raises(TimeoutError):
+        await hub.next(lambda f: f["type"] == "turn.ended", timeout=0.15)
+    await hub.push(approval_answer(card, mid="valid"))
+    assert '"optionId": "ok"' in finals(await hub.collect_turn("t1"))[-1]["text"]
+
+
+async def test_waiting_permission_does_not_block_another_session_or_stop(env):
+    hub, bridge = env
+    await permission_card(hub, bridge)
+    await hub.push(deliver("other", "unrelated", mid="other"))
+    assert "unrelated" in finals(await hub.collect_turn("other"))[-1]["text"]
+    await hub.push({"type": "turn.stop", "thread": "t1", "by": TRUSTED})
+    frames = await hub.collect_turn("t1")
+    assert frames[-1]["stopped"] is True
+    assert '"optionId": "no"' in finals(frames)[-1]["text"]
+    assert not bridge.approvals
+
+
+async def test_permission_expires_and_a_late_answer_cannot_start_a_turn(env, monkeypatch):
+    monkeypatch.setattr(bridge_mod, "PERMISSION_TIMEOUT_S", 0.1)
+    hub, bridge = env
+    card = await permission_card(hub, bridge)
+    frames = await hub.collect_turn("t1")
+    assert any(f.get("text", "").endswith("Permission request expired.") for f in frames)
+    assert '"optionId": "no"' in finals(frames)[-1]["text"]
+    await hub.push(approval_answer(card, mid="late"))
+    with pytest.raises(TimeoutError):
+        await hub.next(timeout=0.1)
+    assert not bridge.approvals
+
+
+async def test_plain_chat_cancels_the_card_instead_of_granting_permission(env):
+    hub, bridge = env
+    await permission_card(hub, bridge)
+    await hub.push(deliver("t1", "Approve", mid="plain-text"))
+    assert '"optionId": "no"' in finals(await hub.collect_turn("t1"))[-1]["text"]
+    assert finals(await hub.collect_turn("t1"))[-1]["text"] == "Echo[s1#2]: Approve"
+
+
+async def test_disconnect_invalidates_a_permission_even_after_a_fast_reconnect(env):
+    hub, bridge = env
+    card = await permission_card(hub, bridge)
+    await hub.ws.close()
+    async with asyncio.timeout(5):
+        while bridge.approvals or bridge.turns:
+            await asyncio.sleep(0.01)
+    assert not bridge.agent._permission_tasks
+    await hub.next(lambda f: f["type"] == "subscribe")
+    await hub.push(approval_answer(card, mid="after-reconnect"))
+    await hub.push(deliver("t1", "back", mid="normal-message"))
+    assert finals(await hub.collect_turn("t1"))[-1]["text"] == "Echo[s1#2]: back"
+
+
+async def test_agent_restart_cannot_reuse_a_pending_permission(env):
+    hub, bridge = env
+    card = await permission_card(hub, bridge)
+    await bridge.agent.stop()
+    frames = await hub.collect_turn("t1")
+    text = finals(frames)[-1]["text"]
+    assert "the agent could not run this turn" in text or '"optionId": "no"' in text
+    assert '"optionId": "ok"' not in text
+    assert not bridge.approvals
+    await hub.push(approval_answer(card, mid="after-restart"))
+    await hub.push(deliver("t1", "back", mid="normal-message"))
+    assert finals(await hub.collect_turn("t1"))[-1]["text"] == "Echo[s1#1]: back"
+
+
+async def test_permission_with_no_allow_once_is_rejected_without_a_card(env):
+    hub, bridge = env
+    bridge.approvals_enabled = True
+    await hub.push(deliver("t1", "PERMISSION ALWAYSONLY"))
+    frames = await hub.collect_turn("t1")
+    assert not any(f["type"] == "ask" for f in frames)
+    assert '"optionId": "no"' in finals(frames)[-1]["text"]
+
+
+async def test_hub_refusal_closes_the_permission_without_waiting_for_expiry(env):
+    hub, bridge = env
+    card = await permission_card(hub, bridge)
+    await hub.push({"type": "error", "ref": card["client_id"], "code": "forbidden"})
+    assert '"optionId": "no"' in finals(await hub.collect_turn("t1"))[-1]["text"]
+    assert not bridge.approvals
+
+
+async def test_approval_is_invalid_if_the_session_changed(env):
+    hub, bridge = env
+    card = await permission_card(hub, bridge)
+    bridge.sessions["t1"] = "replacement"
+    await hub.push(approval_answer(card, mid="answer"))
+    assert '"optionId": "no"' in finals(await hub.collect_turn("t1"))[-1]["text"]
+
+
+@pytest.mark.parametrize("selected", ["okk", "invented"])
+async def test_acp_never_selects_allow_always_or_an_unoffered_option(env, monkeypatch, selected):
+    async def choose(self, params):
+        return selected
+    monkeypatch.setattr(bridge_mod.Turn, "on_permission", choose)
+    hub, _ = env
+    await hub.push(deliver("t1", "PERMISSION"))
+    assert '"optionId": "no"' in finals(await hub.collect_turn("t1"))[-1]["text"]
 
 
 async def test_client_side_fs_request_is_refused(env):
@@ -206,6 +365,14 @@ def test_reject_option():
         {"outcome": {"outcome": "selected", "optionId": "r"}}
     assert reject_option([{"optionId": "a", "kind": "allow_once"}]) == {"outcome": {"outcome": "cancelled"}}
     assert reject_option(None) == {"outcome": {"outcome": "cancelled"}}
+
+
+def test_allow_once_requires_a_unique_offered_id():
+    assert allow_once_option([{"optionId": "once", "kind": "allow_once"}]) == "once"
+    assert allow_once_option([{"optionId": "always", "kind": "allow_always"}]) is None
+    assert allow_once_option([{"optionId": "", "kind": "allow_once"}]) is None
+    assert allow_once_option([{"optionId": "same", "kind": "allow_once"}, {"optionId": "same", "kind": "allow_always"}]) is None
+    assert allow_once_option(None) is None
 
 
 def test_prompt_text_frames_context_as_data():
