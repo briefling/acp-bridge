@@ -32,6 +32,7 @@ import sys
 import tempfile
 import time
 from collections import OrderedDict, deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -40,7 +41,7 @@ from aiohttp import web
 
 from . import attachments as att
 from . import tools as tl
-from .acp import AcpAgent, AcpError
+from .acp import AcpAgent, AcpError, allow_once_option
 from .join import PROTOCOL, PROTOCOL_VERSION, proxy_for
 from . import __version__, mcp_http, perms, selfupdate
 from .mcp import SOCKET_ENV, TOKEN_ENV
@@ -86,6 +87,8 @@ MCP_SERVER = "briefling"   # the MCP server's name in the agent (Kiro: tools @br
 REQUEST_TIMEOUT_S = 20.0   # the hub's answer to a tool frame (as the plugin)
 FLOW_REQUEST_S = 30.0      # a flow frame (board.read through the hub: a page of issues and their notes)
 SOCKET_LINE_MAX = 1 << 20
+PERMISSION_TIMEOUT_S = 300.0
+PERMISSION_PREFIX = "acp-approve-"
 
 
 def new_id() -> str:
@@ -195,6 +198,7 @@ class Turn:
         self.late: Optional[asyncio.Task] = None
         self.after_tool = False  # a tool ran since the last text: the next chunk opens a new paragraph
         self.task = False        # a board task of the flow (no human sent it)
+        self.author: Optional[str] = None
         self.perm: Optional[Dict[str, str]] = None  # first refusal that blocks a task: {what, fix} (perms.py)
         self.closed = False      # the agent itself set the task's status done / blocked during this turn
 
@@ -278,7 +282,10 @@ class Turn:
                 self.tools[i] = title
                 await self.status(self.tools[-1])
 
-    async def on_permission(self, p: Dict[str, Any]) -> None:
+    async def on_permission(self, p: Dict[str, Any]) -> Optional[str]:
+        selected = await self.bridge.ask_permission(self, p)
+        if selected is not None:
+            return selected
         tc = p.get("toolCall") if isinstance(p.get("toolCall"), dict) else {}
         title = str(tc.get("title") or tc.get("kind") or "a tool call")[:MAX_STATUS]
         tool = is_briefling_tool(title)
@@ -293,6 +300,15 @@ class Turn:
             if kind != "tool":
                 self.perm = {"what": what, "fix": perms.fix_line(perms.agent_of(self.bridge.command), kind, what)}
         await self.flush(force=True)
+
+
+@dataclass
+class Approval:
+    turn: Turn
+    session: str
+    ask_id: str
+    answer: asyncio.Future
+    cancelled: bool = False
 
 
 class Bridge:
@@ -315,6 +331,8 @@ class Bridge:
         self.loaded: Set[str] = set()  # sessions known to the current agent process
         self.agent_pid: Optional[int] = None
         self.turns: Dict[str, Turn] = {}
+        self.approvals_enabled = env.get("BRIEFLING_ACP_APPROVALS", "").strip().lower() in ("1", "true", "yes", "on")
+        self.approvals: Dict[str, Approval] = {}
         self.locks: Dict[str, asyncio.Lock] = {}
         self.stop_by: Dict[str, str] = {}
         self.tasks: Set[asyncio.Task] = set()
@@ -460,6 +478,7 @@ class Bridge:
                 except Exception as e:  # network, 401/403 at handshake, token endpoint
                     logger.warning("hub connection error: %s", type(e).__name__)
                 finally:
+                    self._cancel_approvals()
                     self.connected.clear()
                     if self.ws is not None and not self.ws.closed:
                         await self.ws.close()
@@ -474,6 +493,7 @@ class Bridge:
 
     async def close(self) -> None:
         self.running = False
+        self._cancel_approvals()
         if self.flow is not None:
             self.flow.stop()
         for t in list(self.tasks):
@@ -547,6 +567,9 @@ class Bridge:
             if fut and not fut.done():
                 fut.set_result(frame)
         elif kind == "error":
+            for approval in self.approvals.values():
+                if approval.ask_id == frame.get("ref") and not approval.answer.done():
+                    approval.answer.set_result(False)
             fut = self.waiting.pop(str(frame.get("ref")), None)
             if fut and not fut.done():
                 fut.set_exception(HubRefused(str(frame.get("code") or "error"), str(frame.get("detail") or "")[:400]))
@@ -571,6 +594,15 @@ class Bridge:
         if author not in self.allowed:
             logger.warning("message dropped in %s: author not in BRIEFLING_ALLOWED_USERS", thread)
             return
+        ask = msg.get("ask") if isinstance(msg.get("ask"), dict) else {}
+        ask_id = ask.get("id")
+        if msg.get("type") == "answer" and isinstance(ask_id, str) and ask_id.startswith(PERMISSION_PREFIX):
+            approval = self.approvals.get(thread)
+            if (approval is not None and approval.ask_id == ask_id and not approval.answer.done()
+                    and (msg.get("author") or {}).get("kind") == "human" and not msg.get("edited")):
+                approval.answer.set_result(msg["text"] == "Approve")
+            return  # Late, duplicate and foreign approval answers never start a new prompt.
+        self._cancel_approvals(thread)
         self.in_flight += 1
         self._spawn(self.run_turn(thread, frame))
 
@@ -594,6 +626,8 @@ class Bridge:
         async with lock:  # one turn at a time per conversation; a message sent meanwhile waits its turn
             turn = Turn(self, thread)
             turn.task = task is not None
+            if frame and (frame.get("message", {}).get("author") or {}).get("kind") == "human":
+                turn.author = frame["message"]["author"].get("id")
             self.turns[thread] = turn
             self.stop_by.pop(thread, None)
             await self.send({"type": "turn.started", "thread": thread, "at": self.turn_at(thread)})
@@ -616,6 +650,7 @@ class Bridge:
                 reason = None
                 turn.text += "\n\n(the bridge failed during this turn; see its log)"
             finally:
+                self._cancel_approvals(thread)
                 stopped = self.stop_by.pop(thread, None) is not None
                 if reason and reason not in ("end_turn", "cancelled") and not turn.text.strip():
                     turn.text = NO_REPLY.format(reason=reason)
@@ -645,6 +680,63 @@ class Bridge:
             return  # the turn already ended
         self.stop_by[thread] = by
         await self.agent.cancel(sid)
+
+    # -- one-shot human approvals ----------------------------------------------------
+
+    def _cancel_approvals(self, thread: Optional[str] = None) -> None:
+        for tid, approval in self.approvals.items():
+            if thread is None or tid == thread:
+                approval.cancelled = True
+                if not approval.answer.done():
+                    approval.answer.set_result(False)
+
+    async def ask_permission(self, turn: Turn, params: Dict[str, Any]) -> Optional[str]:
+        """A card answers this exact in-memory ACP request, never a new prompt or a persistent allow rule."""
+        thread = turn.thread
+        sid = self.sessions.get(thread)
+        once = allow_once_option(params.get("options"))
+        tc = params.get("toolCall") if isinstance(params.get("toolCall"), dict) else {}
+        if (not self.approvals_enabled or turn.task or turn.author not in self.allowed or once is None
+                or not isinstance(tc.get("toolCallId"), str) or not tc["toolCallId"]
+                or not sid or params.get("sessionId") != sid or self.turns.get(thread) is not turn
+                or thread in self.approvals or not self.connected.is_set()):
+            return None
+        ask_id = PERMISSION_PREFIX + new_id()
+        approval = Approval(turn, sid, ask_id, asyncio.get_running_loop().create_future())
+        self.approvals[thread] = approval
+        summary = perms.approval_summary(params)
+        question = (summary + "\n\nApprove this pending tool call once? This does not change the agent's permissions.\n"
+                    "Only the tool or program is shown here. Arguments and command chains stay on the agent host: "
+                    "review the full action there before approving if unsure.\n"
+                    "This request expires in 5 minutes. Deny if you did not request it.")
+        outcome = "Permission request cancelled."
+        try:
+            await turn.flush(force=True)
+            if not await self.send({"type": "ask", "thread": thread, "ask_id": ask_id, "client_id": ask_id,
+                                    "q": question, "options": ["Approve", "Deny"]}):
+                logger.warning("permission card not sent in thread %s", thread)
+                return None
+            logger.info("permission approval requested in thread %s (%s)", thread, ask_id)
+            try:
+                approved = await asyncio.wait_for(approval.answer, PERMISSION_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                outcome = "Permission request expired."
+                logger.warning("permission approval expired in thread %s", thread)
+                return None
+            if (approved is True and not approval.cancelled and self.turns.get(thread) is turn and self.sessions.get(thread) == sid
+                    and self.connected.is_set() and thread not in self.stop_by):
+                outcome = "Permission approved once."
+                logger.info("permission approved once in thread %s (%s)", thread, ask_id)
+                return once
+            outcome = "Permission not approved."
+            return None
+        finally:
+            if self.approvals.get(thread) is approval:
+                self.approvals.pop(thread)
+            if not approval.answer.done():
+                approval.answer.cancel()
+            await self.send({"type": "message.final", "thread": thread, "msg_id": ask_id,
+                             "text": summary + "\n\n" + outcome, "rev": self.next_rev()})
 
     # -- briefling's tools (MCP server <-> Unix socket <-> hub) -------------------------
 

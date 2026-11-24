@@ -18,6 +18,18 @@ def test_refused_kinds():
     assert perms.refused_of({"toolCall": {"kind": "fetch", "title": "Fetch https://x"}}, False)[0] == "tool"
 
 
+def test_approval_summary_keeps_commands_arguments_and_contents_on_the_host():
+    summary = perms.approval_summary({"toolCall": {
+        "kind": "execute", "title": "TOKEN=s3cret git push https://user:password@host/repo",
+        "rawInput": {"command": "TOKEN=s3cret git push https://user:password@host/repo"},
+        "content": [{"text": "private output"}]}})
+    assert summary == "Shell execution: git push"
+    assert perms.approval_summary({"toolCall": {"kind": "edit", "rawInput": {"content": "private"}}}) == "Tool action: edit"
+    assert perms.approval_summary({"toolCall": {"title": "@briefling/propose_thread",
+                                              "rawInput": {"text": "private"}}}) == "Tool: @briefling/propose_thread"
+    assert perms.approval_summary({"toolCall": {"title": "my token: s3cret"}}) == "Tool action (details kept on the agent host)"
+
+
 def test_agent_of_the_bridge_command():
     assert perms.agent_of(["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.107.3"]) == "claude"
     assert perms.agent_of(["/usr/bin/copilot", "--acp", "--stdio"]) == "copilot"

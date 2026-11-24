@@ -1,8 +1,8 @@
 """A refused permission during a board task (flow): what was refused, said without the command line, and the line to
 add to the agent's own configuration so that it runs unattended next time.
 
-The bridge refuses every ACP permission request (acp.py `reject_option`): what an agent may do alone is decided by its
-own configuration, never by the bridge. An agent whose config does not allow git push / gh / glab would therefore stop
+Unattended turns refuse ACP permission requests (acp.py `reject_option`): what an agent may do alone is decided by its
+own configuration. An agent whose config does not allow git push / gh / glab would therefore stop
 at the same wall on every task; the flow host marks the task blocked with this cause and pauses the agent instead.
 Only the program and its subcommand are kept (`git push`, `gh pr`): the rest of a command line may hold a secret
 (`TOKEN=… git push https://…`), and the cause is shown on the board and in briefling.
@@ -80,6 +80,22 @@ def refused_of(p: Dict[str, Any], briefling_tool: bool) -> Tuple[str, str]:
         return "edit", "file edits"
     name = re.sub(r"[^A-Za-z0-9_./@:-]+", " ", title).strip().split(" ")[0][:40] if title else ""
     return "tool", name or kind or "a tool"
+
+
+def approval_summary(p: Dict[str, Any]) -> str:
+    """Keep arguments, free-form titles, tool output and file contents on the agent host."""
+    tc = p.get("toolCall") if isinstance(p.get("toolCall"), dict) else {}
+    raw = tc.get("rawInput") if isinstance(tc.get("rawInput"), dict) else {}
+    if tc.get("kind") == "execute" or any(k in raw for k in ("command", "cmd", "commandLine")):
+        _, what = refused_of(p, False)
+        return "Shell execution: " + what
+    kind = tc.get("kind")
+    if kind in ("read", "edit", "delete", "move", "search", "fetch"):
+        return "Tool action: " + kind
+    title = tc.get("title")
+    if isinstance(title, str) and re.fullmatch(r"[A-Za-z0-9_@/.-]{1,100}", title):
+        return "Tool: " + title
+    return "Tool action (details kept on the agent host)"
 
 
 def _pattern(what: str) -> str:

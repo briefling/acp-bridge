@@ -128,12 +128,17 @@ def prompt(rid, p):
         import os
         os._exit(3)
     if "PERMISSION" in text:
+        options = [{"optionId": "ok", "name": "Allow", "kind": "allow_once"},
+                   {"optionId": "okk", "name": "Always", "kind": "allow_always"},
+                   {"optionId": "no", "name": "Deny", "kind": "reject_once"}]
+        if "ALWAYSONLY" in text:
+            options = options[1:]
         update(sid, {"sessionUpdate": "tool_call", "toolCallId": "c1", "title": "Run rm -rf build", "kind": "execute", "status": "pending"})
         r = ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": "c1", "title": "Run rm -rf build", "status": "pending"},
-                                               "options": [{"optionId": "ok", "name": "Allow", "kind": "allow_once"},
-                                                           {"optionId": "okk", "name": "Always", "kind": "allow_always"},
-                                                           {"optionId": "no", "name": "Deny", "kind": "reject_once"}]})
+                                               "options": options})
         chunk(sid, "permission answer: " + json.dumps(r.get("result") if r else None, sort_keys=True))
+        if (r or {}).get("result", {}).get("outcome", {}).get("optionId") == "ok":
+            tool_lines(sid, text)
         send({"id": rid, "result": {"stopReason": "end_turn"}})
         return
     if "FS" in text:
@@ -166,7 +171,8 @@ def prompt(rid, p):
         return
     if "PERMTOOL" in text:
         r = ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": "c2", "title": "@briefling/turn_outcome"},
-                                               "options": [{"optionId": "no", "name": "Deny", "kind": "reject_once"}]})
+                                               "options": [{"optionId": "ok", "name": "Allow once", "kind": "allow_once"},
+                                                           {"optionId": "no", "name": "Deny", "kind": "reject_once"}]})
         send({"id": rid, "result": {"stopReason": "end_turn"}})
         return
     if "board task started by the flow" in text and "PUSHME" in text:  # a flow task whose git push is refused

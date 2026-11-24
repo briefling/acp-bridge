@@ -44,11 +44,18 @@ briefling hub  <--WebSocket (outbound only)-->  briefling-acp  <--ACP over stdio
 
 ## Permissions: why Kiro says « Refused »
 
-The bridge offers no file or terminal capability to the agent and **refuses every permission request** with the
+The bridge offers no file or terminal capability to the agent and **by default refuses every permission request** with the
 agent's own reject option; the reply then shows `Refused (not pre-authorized in the agent's own configuration): ...`.
-Nobody in briefling can approve a prompt: what Kiro may run unattended is only what its own config allows.
+What Kiro may run unattended is only what its own config allows.
 
-So if a Kiro agent keeps answering « Refused » on `ls` or `git`, retrying from the chat changes nothing. The operator
+With `BRIEFLING_ACP_APPROVALS=1` (operator opt-in), human-driven turns can instead post a one-shot approval card.
+The answer must be a trusted human's structured response to that exact card; a chat message saying "Approve" is not
+an approval. The bridge holds the ACP request open without blocking its other sessions, and only selects an offered
+`allow_once`. After five minutes, Stop, disconnection or session/agent/bridge replacement, it fails closed. Automatic
+board tasks still refuse permissions. The card deliberately shows only the program or tool: raw arguments and
+command chains can contain credentials and remain on the host. See [One-shot permission cards](../README.md#one-shot-permission-cards).
+
+With the default settings, if a Kiro agent keeps answering « Refused » on `ls` or `git`, retrying from the chat changes nothing. The operator
 of the Kiro host must allow those tools in the agent's config (Kiro CLI 2.x: `allowedTools` of the agent file; V3:
 `~/.kiro/settings/permissions.yaml`), or put the files the agent needs inside its trusted workspace. The briefling tools
 need the same one-time setup (`@briefling` / `briefling/*`, see the README).

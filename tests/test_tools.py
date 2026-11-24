@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from briefling_acp import __version__, mcp, tools  # noqa: E402
 from briefling_acp import bridge as bridge_mod  # noqa: E402
 from briefling_acp.bridge import TOOLS_HINT  # noqa: E402
-from test_bridge import deliver, env, finals  # noqa: E402,F401  (env: the fixture)
+from test_bridge import approval_answer, deliver, env, finals  # noqa: E402,F401  (env: the fixture)
 
 
 async def answer(hub, kind, reply):
@@ -260,6 +260,22 @@ async def test_refused_permission_on_a_briefling_tool_says_how_to_allow_it(env):
     text = finals(await hub.collect_turn("t1"))[-1]["text"]
     assert "Refused (not pre-authorized in the agent's own configuration): @briefling/turn_outcome" in text
     assert TOOLS_HINT in text
+
+
+async def test_approval_resumes_the_tool_in_the_same_turn_and_session(env):
+    hub, bridge = env
+    bridge.approvals_enabled = True
+    await hub.push(deliver("t1", 'PERMISSION\nTOOL propose_thread {"title": "Demo", "brief": "Show cards"}'))
+    card = await hub.next(lambda f: f["type"] == "ask")
+    sid = bridge.sessions["t1"]
+    await hub.push(approval_answer(card, mid="approval"))
+    proposal = await answer(hub, "thread.propose", lambda f: {"type": "ack", "client_id": f["client_id"], "msg_id": "demo"})
+    assert proposal["thread"] == "t1" and proposal["title"] == "Demo"
+    text = finals(await hub.collect_turn("t1"))[-1]["text"]
+    result, error = tool_result(text, "propose_thread")
+    assert result["ok"] is True and not error
+    assert bridge.sessions["t1"] == sid
+    assert not bridge.approvals and bridge.in_flight == 0
 
 
 def test_mcp_server_speaks_initialize_list_and_refuses_the_rest():

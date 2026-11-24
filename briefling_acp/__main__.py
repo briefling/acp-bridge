@@ -32,7 +32,7 @@ from .acp import resolve
 DEFAULT_ENV = os.path.join(os.path.expanduser("~"), ".config", "briefling-acp", "bridge.env")
 DEFAULT_COMMAND = ["kiro-cli", "acp"]
 KEYS = ("BRIEFLING_WS_URL", "BRIEFLING_TOKEN_URL", "BRIEFLING_CLIENT_ID", "BRIEFLING_CLIENT_SECRET", "BRIEFLING_ALLOWED_USERS",
-        "BRIEFLING_ACP_AUTO_UPDATE", "BRIEFLING_FLOW", "BRIEFLING_FLOW_AUTO")
+        "BRIEFLING_ACP_AUTO_UPDATE", "BRIEFLING_ACP_APPROVALS", "BRIEFLING_FLOW", "BRIEFLING_FLOW_AUTO")
 KIRO_LOGIN_HINT = "kiro-cli login"  # Kiro's own message when not logged in: « please log in with kiro-cli login »
 
 
