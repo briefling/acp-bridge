@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from briefling_acp import __main__ as cli  # noqa: E402
 from briefling_acp import __version__, selfupdate  # noqa: E402
+from briefling_acp import tools as tl  # noqa: E402
 from test_bridge import deliver, env, running  # noqa: E402,F401  (env: the fixture)
 
 OLD, NEW = "a" * 40, "b" * 40
@@ -131,12 +132,12 @@ async def test_subscribe_reports_the_version_and_why_it_will_not_update(tmp_path
     monkeypatch.setattr(selfupdate.Install, "here", classmethod(lambda c: selfupdate.Install("", "", "", True, "/v")))
     monkeypatch.setenv(selfupdate.FROM_ENV, "0.0.1")
     async with running(tmp_path, update_path=str(tmp_path / "u.json")) as (hub, _):
-        assert hub.subscribe["bridge"] == {"version": __version__, "update": "manual", "updated_from": "0.0.1"}
+        assert hub.subscribe["bridge"] == {"version": __version__, "tools": sorted(tl.NAMES), "update": "manual", "updated_from": "0.0.1"}
 
 
 async def test_no_update_path_means_no_self_update(env):
     hub, bridge = env
-    assert hub.subscribe["bridge"] == {"version": __version__} and not bridge.auto_update
+    assert hub.subscribe["bridge"] == {"version": __version__, "tools": sorted(tl.NAMES)} and not bridge.auto_update
 
 
 async def test_announced_release_installs_then_restarts_once_no_turn_runs(tmp_path, monkeypatch):

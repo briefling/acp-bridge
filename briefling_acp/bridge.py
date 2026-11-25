@@ -808,7 +808,8 @@ class Bridge:
     async def bridge_report(self) -> Dict[str, Any]:
         """`subscribe.bridge`: this version, why it will not update by itself, and the version it was updated from
         (first connection after a self-update only: the hub posts one notice)."""
-        out: Dict[str, Any] = {"version": __version__}
+        # tools: the briefling tools this bridge gives its agent (protocol/agentcaps.ts: Settings › Agents, warnings)
+        out: Dict[str, Any] = {"version": __version__, "tools": sorted(tl.NAMES)}
         if self.update_path is not None:
             if self.install is None:
                 self.install = await asyncio.get_running_loop().run_in_executor(None, selfupdate.Install.here)

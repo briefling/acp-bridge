@@ -1,6 +1,7 @@
 """briefling's agent tools on the bridge side: which ones the agent gets, how each call becomes a hub frame, and how
 the hub's answer becomes the tool result. Schemas, limits and refusal texts come from tooldefs.py, the Hermes plugin's
-own file, so the agent reads exactly what a Hermes agent reads; the checks below mirror the plugin's tool handlers.
+own file, so the agent reads exactly what a Hermes agent reads; the argument checks are tooldefs.py's build_*
+functions too, the ones the plugin's tool handlers call, so both runtimes refuse the same calls with the same text.
 The hub applies every gate again (turn, membership, space settings): these checks only give the agent a clear
 message before a frame is sent.
 
@@ -11,7 +12,7 @@ Not offered: memory_review/memory_compact (turns the hub starts for a designated
 secret_totp and request_elevation (they need the Hermes plugin).
 """
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 from . import tooldefs as td
 
@@ -42,7 +43,7 @@ SCHEMAS += [td.BOARD_STATUS_SCHEMA, td.BOARD_COMMENT_SCHEMA, td.BOARD_MOVE_SCHEM
             td.BOARD_SET_SCHEMA, td.FLOW_SWITCH_SCHEMA]
 NAMES = [s["name"] for s in SCHEMAS]
 
-Built = Tuple[Optional[Dict[str, Any]], Optional[str]]  # (frame without `thread`, None) or (None, message)
+Built = td.Built  # (frame without `thread`, None) or (None, message)
 
 
 def mcp_tools(mails: bool = True) -> List[Dict[str, Any]]:
@@ -53,151 +54,6 @@ def mcp_tools(mails: bool = True) -> List[Dict[str, Any]]:
 
 def _s(args: Dict[str, Any], key: str) -> str:
     return str(args.get(key) or "").strip()
-
-
-def _one_line(args: Dict[str, Any], key: str) -> str:
-    return " ".join(str(args.get(key) or "").split())
-
-
-def _space(args: Dict[str, Any], frame: Dict[str, Any]) -> Optional[str]:
-    raw = args.get("space")
-    if raw is None or str(raw).strip() == "":
-        return None
-    if not td.ID_RE.match(str(raw).strip()):
-        return "invalid space id."
-    frame["space"] = str(raw).strip()
-    return None
-
-
-def build_outcome(args: Dict[str, Any]) -> Built:
-    outcome, action = _s(args, "outcome"), _one_line(args, "action")
-    if outcome not in ("done", "waiting"):
-        return None, "outcome must be 'done' or 'waiting'."
-    if outcome == "waiting" and not action:
-        return None, "action is required for 'waiting': what must the human do?"
-    if len(action) > td.MAX_ACTION:
-        return None, f"action too long ({len(action)} chars, max {td.MAX_ACTION}): one short line."
-    resume = args.get("resume")
-    if resume is not None and not isinstance(resume, bool):
-        return None, "resume must be true or false."
-    summary, err = td.clean_summary(args.get("summary"))
-    if err:
-        return None, err
-    tags, err = td.clean_thread_tags(args.get("tags"))
-    if err:
-        return None, err
-    if len(_s(args, "text")) > td.MAX_TEXT:  # the bridge posts it in the turn's message (bridge.py), never in the frame
-        return None, f"text too long ({len(_s(args, 'text'))} chars, max {td.MAX_TEXT}): post the rest as a message first."
-    settled, err = td.clean_settled_leads(args.get("settled_leads"), outcome)
-    if err:
-        return None, err
-    return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {}),
-            **({"resume": True} if outcome == "waiting" and resume is True else {}),
-            **({"summary": summary} if summary else {}), **({"tags": tags} if tags else {}),
-            **({"settled_leads": settled} if settled else {})}, None
-
-
-def build_propose(args: Dict[str, Any]) -> Built:
-    title, brief, why = _s(args, "title"), _s(args, "brief"), _s(args, "why")
-    if not title or not brief:
-        return None, "title and brief are required."
-    if len(brief) > td.MAX_BRIEF:
-        return None, f"brief too long ({len(brief)} chars, max {td.MAX_BRIEF}): keep 3 to 5 lines."
-    context, err = td.clean_context(args)
-    if err:
-        return None, err
-    frame = {"type": "thread.propose", "title": title[:120], "brief": brief, **({"why": why[:500]} if why else {}),
-             **({"context": context} if context else {}), **({"topic": True} if args.get("as_topic") is True else {})}
-    err = _space(args, frame)  # another space this agent serves: a topic in its Lounge (the hub checks)
-    return (None, err) if err else (frame, None)
-
-
-def build_issue(args: Dict[str, Any]) -> Built:
-    repo, title, body = _s(args, "repo"), _one_line(args, "title"), _s(args, "body")
-    if not td.BOARD_REPO_RE.fullmatch(repo):
-        return None, "repo is required, as owner/name or a GitLab group/project (one of the repos listed in the message context)."
-    if not title or len(title) > td.NEW_ISSUE_TITLE_MAX:
-        return None, f"title is required, one line, max {td.NEW_ISSUE_TITLE_MAX} chars."
-    if len(body) > td.NEW_ISSUE_BODY_MAX:
-        return None, f"body too long ({len(body)} chars, max {td.NEW_ISSUE_BODY_MAX})."
-    return {"type": "issue.propose", "repo": repo, "title": title, "body": body}, None
-
-
-def build_about(args: Dict[str, Any]) -> Built:
-    text, why = _s(args, "text"), _s(args, "why")
-    if not text:
-        return None, "text is required: the full proposed description."
-    if len(text) > td.MAX_ABOUT:
-        return None, f"description too long ({len(text)} chars, max {td.MAX_ABOUT}): keep it short, it is read on every turn."
-    return {"type": "about.propose", "text": text, **({"why": why[:500]} if why else {})}, None
-
-
-def build_title(args: Dict[str, Any]) -> Built:
-    title = _one_line(args, "title")
-    if not title:
-        return None, "title is required: one short line."
-    if len(title) > td.TOPIC_HEADING_MAX:
-        return None, f"title too long ({len(title)} chars, max {td.TOPIC_HEADING_MAX}): shorten it."
-    tags, err = td.clean_thread_tags(args.get("tags"))
-    if err:
-        return None, err
-    return {"type": "topic.title", "title": title, **({"tags": tags} if tags else {})}, None
-
-
-def _action(kind: str) -> Callable[[Dict[str, Any]], Built]:
-    """action.acquire / action.release; `resource` is read too for the old tool names (acquire_resource...)."""
-    def build(args: Dict[str, Any]) -> Built:
-        action = _s(args, "action") or _s(args, "resource")
-        if not td.RESOURCE_RE.fullmatch(action):
-            return None, (f"invalid action name {action[:60]!r}: use a name listed in the conversation context "
-                          "(e.g. 'emulator', 'stack:briefling-prod').")
-        return {"type": kind, "action": action}, None
-    return build
-
-
-def build_pushed(args: Dict[str, Any]) -> Built:
-    commits, err = td.clean_commits(args)
-    return (None, err) if err else ({"type": "ci.watch", "commits": commits}, None)
-
-
-def build_search(args: Dict[str, Any]) -> Built:
-    q = _one_line(args, "query")
-    if len(q) > td.MEMORY_Q_MAX:
-        return None, f"query too long (max {td.MEMORY_Q_MAX} chars)."
-    frame: Dict[str, Any] = {"type": "memory.search", "q": q}
-    err = _space(args, frame)
-    return (None, err) if err else (frame, None)
-
-
-def build_read(args: Dict[str, Any]) -> Built:
-    entry = _s(args, "id")
-    if not td.ID_RE.match(entry):
-        return None, "id is required: an entry id from memory_search."
-    frame: Dict[str, Any] = {"type": "memory.read", "id": entry}
-    err = _space(args, frame)
-    return (None, err) if err else (frame, None)
-
-
-def build_memory_propose(args: Dict[str, Any]) -> Built:
-    text, kind = _s(args, "text"), _s(args, "kind")
-    if not text or len(text) > td.MEMORY_TEXT_MAX:
-        return None, f"text is required, max {td.MEMORY_TEXT_MAX} chars: one short fact."
-    if kind not in ("fact", "rule"):
-        return None, "kind must be 'fact' or 'rule'."
-    sources, err = td.clean_sources(args.get("sources"))
-    if err:
-        return None, err
-    tags, err = td.clean_tags(args.get("tags"), required=True)
-    if err:
-        return None, err
-    replaces, err = td.clean_replaces(args.get("replaces"))
-    if err:
-        return None, err
-    title, err = td.clean_title(args.get("title"), required=kind == "rule")
-    if err:
-        return None, err
-    return {"type": "memory.propose", "text": text, "kind": kind, "sources": sources, "tags": tags, **({"replaces": replaces} if replaces else {}),
-            **({"title": title} if title else {})}, None
 
 
 def build_applet_list(_args: Dict[str, Any]) -> Built:
@@ -250,11 +106,11 @@ def build_attachment_get(args: Dict[str, Any]) -> Built:
 
 
 BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
-    "turn_outcome": build_outcome, "propose_thread": build_propose, "propose_issue": build_issue, "propose_plan": td.build_plan,
+    "turn_outcome": td.build_turn_outcome, "propose_thread": td.build_propose_thread, "propose_issue": td.build_propose_issue, "propose_plan": td.build_plan,
     "ask_choices": td.build_ask_choices, "poll_vote": td.build_poll_vote,
-    "propose_space_about": build_about, "propose_action": td.build_propose_action, "acquire_action": _action("action.acquire"),
-    "release_action": _action("action.release"), "acquire_resource": _action("action.acquire"), "release_resource": _action("action.release"), "pushed_commits": build_pushed, "memory_search": build_search,
-    "memory_read": build_read, "memory_propose": build_memory_propose, "topic_title": build_title,
+    "propose_space_about": td.build_space_about, "propose_action": td.build_propose_action, "acquire_action": td.build_action("action.acquire"),
+    "release_action": td.build_action("action.release"), "acquire_resource": td.build_action("action.acquire"), "release_resource": td.build_action("action.release"), "pushed_commits": td.build_pushed_commits, "memory_search": td.build_memory_search,
+    "memory_read": td.build_memory_read, "memory_propose": td.build_memory_propose, "topic_title": td.build_topic_title,
     "space_threads": td.build_space_threads, "thread_read": td.build_thread_read, "space_metrics": td.build_space_metrics,
     "radar_signal": td.build_radar_signal,
     "radar_clear": td.build_radar_clear,

@@ -2912,3 +2912,158 @@ FLOW_SWITCH_SCHEMA = {
         "link": {"type": "string", "description": "The whole switch link (…/agent.md?switch=…&space=…&agent=…)."},
     }, "required": ["link"]},
 }
+
+
+# -- Frame builders of the plain tools: arguments -> hub frame (without thread/client_id), or an error message. Plugin
+# and bridge call these same functions, so limits and refusal texts never drift apart. The hub checks everything again.
+
+Built = Tuple[Optional[Dict[str, Any]], Optional[str]]  # (frame, None) or (None, message)
+
+
+def _arg(args: Dict[str, Any], key: str) -> str:
+    return str(args.get(key) or "").strip()
+
+
+def _arg_line(args: Dict[str, Any], key: str) -> str:
+    return " ".join(str(args.get(key) or "").split())
+
+
+def build_turn_outcome(args: Dict[str, Any]) -> Built:
+    """turn_outcome -> thread.outcome. `text` is checked here but never rides the frame: the caller posts it first."""
+    outcome, action = _arg(args, "outcome"), _arg_line(args, "action")
+    if outcome not in ("done", "waiting"):
+        return None, "outcome must be 'done' or 'waiting'."
+    if outcome == "waiting" and not action:
+        return None, "action is required for 'waiting': what must the human do?"
+    if len(action) > MAX_ACTION:
+        return None, f"action too long ({len(action)} chars, max {MAX_ACTION}): one short line."
+    resume = args.get("resume")
+    if resume is not None and not isinstance(resume, bool):
+        return None, "resume must be true or false."
+    summary, err = clean_summary(args.get("summary"))
+    if err:
+        return None, err
+    tags, err = clean_thread_tags(args.get("tags"))
+    if err:
+        return None, err
+    text = _arg(args, "text")
+    if len(text) > MAX_TEXT:
+        return None, f"text too long ({len(text)} chars, max {MAX_TEXT}): post the rest as a message first."
+    settled, err = clean_settled_leads(args.get("settled_leads"), outcome)
+    if err:
+        return None, err
+    return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {}),
+            **({"resume": True} if outcome == "waiting" and resume is True else {}),
+            **({"summary": summary} if summary else {}), **({"tags": tags} if tags else {}),
+            **({"settled_leads": settled} if settled else {})}, None
+
+
+def build_propose_thread(args: Dict[str, Any]) -> Built:
+    """propose_thread -> thread.propose (`space`: a topic in another space's Lounge, the hub checks it is served)."""
+    title, brief, why = _arg(args, "title"), _arg(args, "brief"), _arg(args, "why")
+    if not title or not brief:
+        return None, "title and brief are required."
+    if len(brief) > MAX_BRIEF:
+        return None, f"brief too long ({len(brief)} chars, max {MAX_BRIEF}): keep 3 to 5 lines."
+    context, err = clean_context(args)
+    if err:
+        return None, err
+    frame = {"type": "thread.propose", "title": title[:120], "brief": brief, **({"why": why[:500]} if why else {}),
+             **({"context": context} if context else {}), **({"topic": True} if args.get("as_topic") is True else {})}
+    err = _opt_space(args, frame)
+    return (None, err) if err else (frame, None)
+
+
+def build_propose_issue(args: Dict[str, Any]) -> Built:
+    """propose_issue -> issue.propose (a card; a trusted human creates the issue)."""
+    repo, title, body = _arg(args, "repo"), _arg_line(args, "title"), _arg(args, "body")
+    if not BOARD_REPO_RE.fullmatch(repo):
+        return None, "repo is required, as owner/name or a GitLab group/project (one of the repos listed in the message context)."
+    if not title or len(title) > NEW_ISSUE_TITLE_MAX:
+        return None, f"title is required, one line, max {NEW_ISSUE_TITLE_MAX} chars."
+    if len(body) > NEW_ISSUE_BODY_MAX:
+        return None, f"body too long ({len(body)} chars, max {NEW_ISSUE_BODY_MAX})."
+    return {"type": "issue.propose", "repo": repo, "title": title, "body": body}, None
+
+
+def build_space_about(args: Dict[str, Any]) -> Built:
+    """propose_space_about -> about.propose (a draft card, never written to the space)."""
+    text, why = _arg(args, "text"), _arg(args, "why")
+    if not text:
+        return None, "text is required: the full proposed description."
+    if len(text) > MAX_ABOUT:
+        return None, f"description too long ({len(text)} chars, max {MAX_ABOUT}): keep it short, it is read on every turn."
+    return {"type": "about.propose", "text": text, **({"why": why[:500]} if why else {})}, None
+
+
+def build_topic_title(args: Dict[str, Any]) -> Built:
+    """topic_title -> topic.title."""
+    title = _arg_line(args, "title")
+    if not title:
+        return None, "title is required: one short line."
+    if len(title) > TOPIC_HEADING_MAX:
+        return None, f"title too long ({len(title)} chars, max {TOPIC_HEADING_MAX}): shorten it."
+    tags, err = clean_thread_tags(args.get("tags"))
+    if err:
+        return None, err
+    return {"type": "topic.title", "title": title, **({"tags": tags} if tags else {})}, None
+
+
+def build_action(kind: str):
+    """action.acquire / action.release builder; `resource` is read too for the old tool names (acquire_resource...)."""
+    def build(args: Dict[str, Any]) -> Built:
+        action = _arg(args, "action") or _arg(args, "resource")
+        if not RESOURCE_RE.fullmatch(action):
+            return None, (f"invalid action name {action[:60]!r}: use a name listed in the conversation context "
+                          "(e.g. 'emulator', 'stack:briefling-prod').")
+        return {"type": kind, "action": action}, None
+    return build
+
+
+def build_pushed_commits(args: Dict[str, Any]) -> Built:
+    """pushed_commits -> ci.watch."""
+    commits, err = clean_commits(args)
+    return (None, err) if err else ({"type": "ci.watch", "commits": commits}, None)
+
+
+def build_memory_search(args: Dict[str, Any]) -> Built:
+    """memory_search -> memory.search (optional `space`: another space this agent serves)."""
+    q = _arg_line(args, "query")
+    if len(q) > MEMORY_Q_MAX:
+        return None, f"query too long (max {MEMORY_Q_MAX} chars)."
+    frame: Dict[str, Any] = {"type": "memory.search", "q": q}
+    err = _opt_space(args, frame)
+    return (None, err) if err else (frame, None)
+
+
+def build_memory_read(args: Dict[str, Any]) -> Built:
+    """memory_read -> memory.read."""
+    entry = _arg(args, "id")
+    if not ID_RE.match(entry):
+        return None, "id is required: an entry id from memory_search."
+    frame: Dict[str, Any] = {"type": "memory.read", "id": entry}
+    err = _opt_space(args, frame)
+    return (None, err) if err else (frame, None)
+
+
+def build_memory_propose(args: Dict[str, Any]) -> Built:
+    """memory_propose -> memory.propose (never a direct write: the space's gate decides)."""
+    text, kind = _arg(args, "text"), _arg(args, "kind")
+    if not text or len(text) > MEMORY_TEXT_MAX:
+        return None, f"text is required, max {MEMORY_TEXT_MAX} chars: one short fact."
+    if kind not in ("fact", "rule"):
+        return None, "kind must be 'fact' or 'rule'."
+    sources, err = clean_sources(args.get("sources"))
+    if err:
+        return None, err
+    tags, err = clean_tags(args.get("tags"), required=True)
+    if err:
+        return None, err
+    replaces, err = clean_replaces(args.get("replaces"))
+    if err:
+        return None, err
+    title, err = clean_title(args.get("title"), required=kind == "rule")
+    if err:
+        return None, err
+    return {"type": "memory.propose", "text": text, "kind": kind, "sources": sources, "tags": tags,
+            **({"replaces": replaces} if replaces else {}), **({"title": title} if title else {})}, None

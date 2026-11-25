@@ -75,6 +75,7 @@ How a turn and a tool call flow through the bridge, and what to check when Kiro 
   (`mail_import` in a lead's turn, `exchange_read` / `exchange_summary` in the hidden summary run) are listed only in
   a space whose Exchanges module is on (the hub's deliver says `exchanges: false` otherwise), so they cost nothing
   elsewhere.
+- **Capabilities**: at every connection the bridge announces the names of the tools above (`subscribe.bridge.tools`); Settings › Agents shows them as features.
 - **Not relayed**: general agent questions with buttons (apart from permission cards), cost per thread, the memory
   review turns, preview sharing, the voice channel, `secret_totp` and `request_elevation` (those need the Hermes
   plugin).

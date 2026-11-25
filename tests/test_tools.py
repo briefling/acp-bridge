@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from briefling_acp import __version__, mcp, tools  # noqa: E402
+from briefling_acp import __version__, mcp, tooldefs as td, tools  # noqa: E402
 from briefling_acp import bridge as bridge_mod  # noqa: E402
 from briefling_acp.bridge import TOOLS_HINT  # noqa: E402
 from test_bridge import approval_answer, deliver, env, finals  # noqa: E402,F401  (env: the fixture)
@@ -115,30 +115,30 @@ async def test_agent_lists_the_tools_and_ends_its_turn_with_done(env):
 
 
 def test_build_outcome_carries_the_checked_summary():
-    f, err = tools.build_outcome({"outcome": "done", "summary": {"status": " Merged.\n", "next_steps": [{"who": "a", "what": " b "}]}})
+    f, err = td.build_turn_outcome({"outcome": "done", "summary": {"status": " Merged.\n", "next_steps": [{"who": "a", "what": " b "}]}})
     assert not err and f["summary"] == {"status": "Merged.", "decisions": [], "next_steps": [{"who": "a", "what": "b"}], "waiting_on": None}
-    f, err = tools.build_outcome({"outcome": "done"})
+    f, err = td.build_turn_outcome({"outcome": "done"})
     assert not err and "summary" not in f
-    f, err = tools.build_outcome({"outcome": "done", "summary": {"status": "ok", "decisions": [1]}})
+    f, err = td.build_turn_outcome({"outcome": "done", "summary": {"status": "ok", "decisions": [1]}})
     assert f is None and "decision" in err
 
 
 def test_build_outcome_carries_settled_leads_on_done_only():
-    f, err = tools.build_outcome({"outcome": "done", "settled_leads": ["t7-ab", "t7-ab"]})
+    f, err = td.build_turn_outcome({"outcome": "done", "settled_leads": ["t7-ab", "t7-ab"]})
     assert not err and f["settled_leads"] == ["t7-ab"]
-    assert "settled_leads" not in tools.build_outcome({"outcome": "done", "settled_leads": []})[0]
-    assert "only with 'done'" in tools.build_outcome({"outcome": "waiting", "action": "x", "settled_leads": ["a"]})[1]
-    assert "lead ids" in tools.build_outcome({"outcome": "done", "settled_leads": ["../a"]})[1]
+    assert "settled_leads" not in td.build_turn_outcome({"outcome": "done", "settled_leads": []})[0]
+    assert "only with 'done'" in td.build_turn_outcome({"outcome": "waiting", "action": "x", "settled_leads": ["a"]})[1]
+    assert "lead ids" in td.build_turn_outcome({"outcome": "done", "settled_leads": ["../a"]})[1]
 
 
 def test_build_outcome_carries_resume_on_waiting_only():
-    f, err = tools.build_outcome({"outcome": "waiting", "action": "restart", "resume": True})
+    f, err = td.build_turn_outcome({"outcome": "waiting", "action": "restart", "resume": True})
     assert not err and f["resume"] is True
-    f, _ = tools.build_outcome({"outcome": "waiting", "action": "restart"})
+    f, _ = td.build_turn_outcome({"outcome": "waiting", "action": "restart"})
     assert "resume" not in f
-    f, _ = tools.build_outcome({"outcome": "done", "resume": True})
+    f, _ = td.build_turn_outcome({"outcome": "done", "resume": True})
     assert "resume" not in f
-    f, err = tools.build_outcome({"outcome": "waiting", "action": "restart", "resume": "yes"})
+    f, err = td.build_turn_outcome({"outcome": "waiting", "action": "restart", "resume": "yes"})
     assert f is None and "resume" in err
     assert tools.SCHEMAS[0]["parameters"]["properties"]["resume"]["type"] == "boolean"
 
@@ -346,9 +346,9 @@ def test_version_matches_pyproject():
 
 
 def test_build_title_one_line_bounded():
-    assert tools.build_title({"title": " Firmware\n 2.4 "}) == ({"type": "topic.title", "title": "Firmware 2.4"}, None)
-    assert tools.build_title({"title": " "})[0] is None
-    assert "too long" in tools.build_title({"title": "a" * 61})[1]
+    assert td.build_topic_title({"title": " Firmware\n 2.4 "}) == ({"type": "topic.title", "title": "Firmware 2.4"}, None)
+    assert td.build_topic_title({"title": " "})[0] is None
+    assert "too long" in td.build_topic_title({"title": "a" * 61})[1]
     assert "already has a title" in tools.refused("topic_title", "already_titled")["detail"]
     assert "Lounge list" in tools.result("topic_title", {}, {})["detail"]
 
@@ -441,7 +441,7 @@ def test_memory_propose_takes_tags_like_the_plugin():
 
 
 def test_build_propose_forwards_the_context_summary():
-    from briefling_acp.tools import build_propose
+    from briefling_acp.tooldefs import build_propose_thread as build_propose
     f, err = build_propose({"title": "T", "brief": "b", "context": " decided: 10 % "})
     assert err is None and f["context"] == "decided: 10 %"
     assert "context" not in build_propose({"title": "T", "brief": "b"})[0]
@@ -449,14 +449,14 @@ def test_build_propose_forwards_the_context_summary():
 
 
 def test_build_propose_as_topic_sends_topic_flag():
-    from briefling_acp.tools import build_propose
+    from briefling_acp.tooldefs import build_propose_thread as build_propose
     f, err = build_propose({"title": "T", "brief": "b", "as_topic": True})
     assert err is None and f["topic"] is True and "space" not in f
     assert "topic" not in build_propose({"title": "T", "brief": "b", "as_topic": "yes"})[0]
 
 
 def test_build_propose_forwards_target_space():
-    from briefling_acp.tools import build_propose
+    from briefling_acp.tooldefs import build_propose_thread as build_propose
     f, err = build_propose({"title": "T", "brief": "b", "space": " lab-two "})
     assert err is None and f["space"] == "lab-two"
     f, _ = build_propose({"title": "T", "brief": "b"})
@@ -506,12 +506,12 @@ def test_radar_profile_builds_like_the_plugin_and_reads_the_ack():
 
 
 def test_build_title_and_outcome_carry_the_tags():
-    assert tools.build_title({"title": "Firmware", "tags": ["ui"]}) == ({"type": "topic.title", "title": "Firmware", "tags": ["ui"]}, None)
-    f, err = tools.build_outcome({"outcome": "done", "tags": ["ui", "css"]})
+    assert td.build_topic_title({"title": "Firmware", "tags": ["ui"]}) == ({"type": "topic.title", "title": "Firmware", "tags": ["ui"]}, None)
+    f, err = td.build_turn_outcome({"outcome": "done", "tags": ["ui", "css"]})
     assert not err and f["tags"] == ["ui", "css"]
-    assert "tags" not in tools.build_outcome({"outcome": "done", "tags": []})[0]
-    assert "tags must be" in tools.build_outcome({"outcome": "done", "tags": ["a", "b", "c"]})[1]
-    assert "tags must be" in tools.build_title({"title": "x", "tags": "ui"})[1]
+    assert "tags" not in td.build_turn_outcome({"outcome": "done", "tags": []})[0]
+    assert "tags must be" in td.build_turn_outcome({"outcome": "done", "tags": ["a", "b", "c"]})[1]
+    assert "tags must be" in td.build_topic_title({"title": "x", "tags": "ui"})[1]
     assert "list is closed" in tools.refused("turn_outcome", "unknown_tag")["detail"]
 
 
@@ -525,19 +525,31 @@ async def test_waiting_with_text_posts_it_before_the_frame(env):
     await hub.push({"type": "ack", "client_id": f["client_id"]})
     res, _ = tool_result(finals(await hub.collect_turn("t1"))[-1]["text"], "turn_outcome")
     assert res["ok"] is True
-    assert "text" not in tools.build_outcome({"outcome": "done", "text": "x"})[0]  # never sent to the hub as a field
-    assert tools.build_outcome({"outcome": "done", "text": "x" * 32_001})[1]
+    assert "text" not in td.build_turn_outcome({"outcome": "done", "text": "x"})[0]  # never sent to the hub as a field
+    assert td.build_turn_outcome({"outcome": "done", "text": "x" * 32_001})[1]
 
 
 def test_tolerant_shapes_like_the_plugin():
     sha = "ab" * 20
-    frame, err = tools.build_pushed({"repo": "https://github.com/acme/app", "commit": sha, "branch": "main"})
+    frame, err = td.build_pushed_commits({"repo": "https://github.com/acme/app", "commit": sha, "branch": "main"})
     assert not err and frame["commits"] == [{"repo": "acme/app", "sha": sha, "branch": "main"}]
-    assert "repo" in tools.build_pushed({"commits": [{"sha": sha}]})[1]
-    frame, err = tools.build_memory_propose({"text": "t", "kind": "fact", "tags": ["deploy"]})
+    assert "repo" in td.build_pushed_commits({"commits": [{"sha": sha}]})[1]
+    frame, err = td.build_memory_propose({"text": "t", "kind": "fact", "tags": ["deploy"]})
     assert not err and frame["sources"] == ["this thread"]
-    frame, err = tools.build_outcome({"outcome": "done", "summary": "All shipped."})
+    frame, err = td.build_turn_outcome({"outcome": "done", "summary": "All shipped."})
     assert not err and frame["summary"]["status"] == "All shipped."
+
+
+def test_plain_tools_use_the_plugin_builders():
+    """The bridge validates with tooldefs.py's builders, the ones the plugin's handlers call: no second copy to drift."""
+    for tool, build in {"turn_outcome": td.build_turn_outcome, "propose_thread": td.build_propose_thread,
+                        "propose_issue": td.build_propose_issue, "propose_space_about": td.build_space_about,
+                        "topic_title": td.build_topic_title, "pushed_commits": td.build_pushed_commits,
+                        "memory_search": td.build_memory_search, "memory_read": td.build_memory_read,
+                        "memory_propose": td.build_memory_propose}.items():
+        assert tools.BUILD[tool] is build, tool
+    assert tools.BUILD["acquire_action"]({"action": "emulator"}) == ({"type": "action.acquire", "action": "emulator"}, None)
+    assert tools.BUILD["release_resource"]({"resource": "emulator"}) == ({"type": "action.release", "action": "emulator"}, None)
 
 
 
