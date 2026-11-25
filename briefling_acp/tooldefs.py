@@ -77,7 +77,7 @@ MEMORY_NUDGE = (
     "duplicates). Never a description of what a file already holds (code, values, a list): reading it finds it. "
     "Nothing worth keeping is a normal "
     "answer: then just end your turn. Project memory = facts of the project, for every agent of the space; a "
-    "procedure of the project (how to deploy, test, release it) goes to the space's skills (skill_propose), and an "
+    "procedure of the project (how to deploy, test, release it) goes to the space's skills (turn_outcome `learned`, or skill_propose), and an "
     "entry may point to it as skill:<name>; your own skills = how you work as an agent.")
 
 # Lounge topics have no turn_outcome: the same suggestion rides the topic's context line instead (no extra call).
@@ -800,6 +800,7 @@ LEADS_MAX = 2
 LEAD_WHAT_MAX = 300
 LEADS_OPEN_MAX = 3
 SETTLED_LEADS_MAX = 10
+LEARNED_MAX = 2000  # protocol/skills.ts LESSON_MAX
 LEAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,80}")
 
 
@@ -1414,6 +1415,13 @@ OUTCOME_SCHEMA = {
             "settled_leads": {"type": "array", "items": {"type": "string"}, "maxItems": SETTLED_LEADS_MAX, "description": (
                 "'done' only, optional: ids of the pending leads given in this thread's context ([lead <id>]) that "
                 "this thread's work really did; the hub removes them. Never one you only find close in words.")},
+            "learned": {"type": "string", "description": (
+                f"'done' only, optional (max {LEARNED_MAX} chars): what this thread taught you that another agent of this "
+                "space will meet again, from what only you saw in it (tool outputs, errors, wrong tries and what fixed "
+                "them): a procedure or a pitfall, written as rules with their why, never the story (no dates, ids, task "
+                "progress), no secret nor personal data. The space's memory agent puts it into the right skill of the "
+                "space, which every agent reads: do not also save it as a personal skill. Nothing worth keeping: leave it "
+                "out, the normal case.")},
         },
         "required": ["outcome"],
     },
@@ -2952,10 +2960,15 @@ def build_turn_outcome(args: Dict[str, Any]) -> Built:
     settled, err = clean_settled_leads(args.get("settled_leads"), outcome)
     if err:
         return None, err
+    learned = _arg(args, "learned")
+    if learned and outcome != "done":
+        return None, "learned only with 'done'."
+    if len(learned) > LEARNED_MAX:
+        return None, f"learned too long ({len(learned)} chars, max {LEARNED_MAX}): keep the rules and their why."
     return {"type": "thread.outcome", "outcome": outcome, **({"action": action} if outcome == "waiting" else {}),
             **({"resume": True} if outcome == "waiting" and resume is True else {}),
             **({"summary": summary} if summary else {}), **({"tags": tags} if tags else {}),
-            **({"settled_leads": settled} if settled else {})}, None
+            **({"settled_leads": settled} if settled else {}), **({"learned": learned} if learned else {})}, None
 
 
 def build_propose_thread(args: Dict[str, Any]) -> Built:
