@@ -562,7 +562,7 @@ class Bridge:
                 self._spawn(self._flow_frame(frame))
         elif kind == "release":  # pushed by the hub right after a deploy
             self.on_release(frame.get("release"))
-        elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "radar.edited", "skill.result", "skill.proposed", "memory.proposed", "files.urls",
+        elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "radar.edited", "skill.result", "skill.proposed", "doc.result", "doc.text", "memory.proposed", "files.urls",
                       "flow.result", "board.items", "board.written", "flow.switched", "applet.list", "mail.imported", "exchange.read"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():

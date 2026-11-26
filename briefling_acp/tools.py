@@ -19,7 +19,7 @@ from . import tooldefs as td
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.PROPOSE_ACTION_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.ACQUIRE_ALIAS_SCHEMA, td.RELEASE_ALIAS_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
            td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_CLEAR_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.RADAR_PROFILE_EDIT_SCHEMA, td.POLL_VOTE_SCHEMA, td.AGENT_CARD_SCHEMA,
-           td.SKILL_READ_SCHEMA, td.SKILL_PROPOSE_SCHEMA, td.APPLET_PROPOSE_SCHEMA, td.APPLET_LIST_SCHEMA,
+           td.SKILL_READ_SCHEMA, td.SKILL_PROPOSE_SCHEMA, td.DOCUMENT_WRITE_SCHEMA, td.DOCUMENT_READ_SCHEMA, td.APPLET_PROPOSE_SCHEMA, td.APPLET_LIST_SCHEMA,
            td.REMINDER_PROPOSE_SCHEMA, td.MAIL_IMPORT_SCHEMA, td.EXCHANGE_READ_SCHEMA, td.EXCHANGE_SUMMARY_SCHEMA]
 # Mail exchanges: offered only when the space's « exchanges » module is on (each one is read on every turn).
 MAIL_TOOLS = ("mail_import", "exchange_read", "exchange_summary")
@@ -118,6 +118,7 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "radar_profile_edit": td.build_radar_profile_edit,
     "attachment_get": build_attachment_get, "agent_card": td.build_agent_card,
     "skill_read": td.build_skill_read, "skill_propose": td.build_skill_propose,
+    "document_write": td.build_document_write, "document_read": td.build_document_read,
     "applet_propose": td.build_applet_propose, "applet_list": build_applet_list, "reminder_propose": td.build_reminder_propose,
     "mail_import": build_mail_import, "exchange_read": build_exchange_read, "exchange_summary": td.build_exchange_summary,
 }
@@ -160,6 +161,7 @@ ERRORS = {
     "attachment_get": {**td.INTROSPECT_ERRORS, "files_off": "This hub stores no files."},
     "agent_card": td.AGENT_CARD_ERRORS,
     "skill_read": td.SKILL_ERRORS, "skill_propose": td.SKILL_ERRORS,
+    "document_write": td.DOC_ERRORS, "document_read": td.DOC_ERRORS,
     "applet_propose": td.APPLET_ERRORS, "applet_list": td.APPLET_ERRORS, "reminder_propose": td.REMINDER_ERRORS,
     "mail_import": {**MODULE_OFF, **td.MAIL_ERRORS}, "exchange_read": {**MODULE_OFF, **td.EXCHANGE_ERRORS},
     "exchange_summary": {**MODULE_OFF, **td.EXCHANGE_ERRORS},
@@ -203,6 +205,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return td.agent_card_result(frame, answer)
     if tool in ("skill_read", "skill_propose"):
         return td.skill_result(frame, answer)
+    if tool in ("document_write", "document_read"):
+        return td.document_result(frame, answer)
     if tool == "radar_profile":
         return {"ok": True, "detail": td.RADAR_PROFILE_SENT}
     if tool == "radar_profile_edit":

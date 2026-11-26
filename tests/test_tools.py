@@ -661,3 +661,30 @@ async def test_mail_tools_are_listed_only_when_the_exchanges_module_is_on(env):
     listed = re.search(r"^tools: (.*)$", finals(await hub.collect_turn("t1"))[-1]["text"], re.M).group(1).split(",")
     assert set(tools.MAIL_TOOLS) <= set(listed)
     assert [t["name"] for t in tools.mcp_tools(False)] == [n for n in tools.NAMES if n not in tools.MAIL_TOOLS]
+
+
+
+async def test_document_tools_shared_with_the_plugin(env):
+    hub, _ = env
+    assert {"document_write", "document_read"} <= set(tools.NAMES)
+    await hub.push(deliver("t1", 'TOOL document_write {"title": "Brief", "format": "md", "content": "# Brief"}\n'
+                                 'TOOL document_read {"document": "d1"}\n'
+                                 'TOOL document_write {"title": "Brief", "format": "md", "content": "# v2", "document": "d1"}\n'
+                                 'TOOL document_write {"title": "Brief", "format": "pdf", "content": "x"}'))
+    v1 = {"n": 1, "at": 5, "by": "a", "size": 7, "title": "Brief", "format": "md"}
+    info = {"id": "d1", "thread": "t1", "title": "Brief", "format": "md", "at": 5, "by": "a", "versions": [v1]}
+    f = await answer(hub, "doc.write", lambda f: {"type": "doc.result", "client_id": f["client_id"], "thread": "t1", "msg_id": "c1", "doc": info})
+    assert (f["thread"], f["text"], "doc" in f) == ("t1", "# Brief", False)
+    f = await answer(hub, "doc.read", lambda f: {"type": "doc.text", "client_id": f["client_id"], "doc": info, "version": v1, "text": "# Brief"})
+    assert f["doc"] == "d1" and "version" not in f
+    f = await answer(hub, "doc.write", lambda f: {"type": "error", "ref": f["client_id"], "code": "too_many_versions"})
+    assert f["doc"] == "d1"
+    text = finals(await hub.collect_turn("t1"))[-1]["text"]
+    res = re.findall(r"^document_write -> (.*) error=(True|False)$", text, re.M)
+    assert len(res) == 3, text
+    first, refused, bad = (json.loads(r[0]) for r in res)
+    assert (first["document"], first["version"], first["card"]) == ("d1", 1, "c1")
+    assert refused["error"] == "too_many_versions" and "new document" in refused["detail"]
+    assert "'md' or 'html'" in json.dumps(bad)  # refused by the bridge: no 3rd doc.write frame was answered above
+    read, _ = tool_result(text, "document_read")
+    assert (read["text"], read["versions"], read["title"]) == ("# Brief", [v1], "Brief")
