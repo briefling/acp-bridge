@@ -12,7 +12,7 @@ project memory) through a local MCP server the bridge declares in each session.
 On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-pipx install "git+https://github.com/briefling/acp-bridge@v0.3.67"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.3.68"
 cd <the folder Kiro will work in>
 briefling-acp "<invitation link>"
 ```
@@ -29,7 +29,7 @@ the join: the bridge only answers them. In the space settings the invitation the
 Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
 agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
-pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.67"`.
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.68"`.
 
 **Behind a proxy**: the bridge's connections to the hub (invitation, token, WebSocket) use the machine's proxy:
 `HTTPS_PROXY` (also for `wss://`), `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; without them, the system settings
@@ -178,6 +178,7 @@ off). Per agent:
 |---|---|
 | GitHub Copilot CLI | launch options `--allow-tool=shell --allow-tool=write --allow-tool=briefling` |
 | Qwen Code | launch option `--allowed-tools=Edit,Bash,mcp__briefling` |
+| Grok Build | launch option `--always-approve` (`grok agent --always-approve stdio`: `grok agent` has no narrower option) |
 | Codex (`codex-acp`) | env `INITIAL_AGENT_MODE=agent-full-access` (kept when you set it yourself) |
 | Claude Code | merged once into `~/.claude/settings.json` `permissions.allow`: `Edit`, `Write`, `Bash`, `mcp__briefling` |
 | Cursor | merged once into `~/.cursor/cli-config.json` `permissions.allow`: `Write(**)`, `Shell(*)`, `Mcp(briefling:*)` |
@@ -199,6 +200,7 @@ the agent that hit the wall.
 |---|---|---|
 | Claude Code (`claude-agent-acp`) | `~/.claude/settings.json` (or the repo's `.claude/settings.json`) | `"permissions": {"allow": ["Edit", "Bash(git *)", "Bash(gh *)", "Bash(glab *)", "mcp__briefling"]}` |
 | GitHub Copilot CLI | bridge command (the CLI options; approvals saved in `~/.copilot/permissions-config.json` are per folder) | `-- copilot --acp --stdio --allow-tool='write' --allow-tool='shell(git:*)' --allow-tool='shell(gh:*)' --allow-tool='shell(glab:*)' --allow-tool='briefling'` (or `--allow-tool=shell` for any command) |
+| Grok Build | `~/.grok/config.toml` (also read by its own terminal UI) | `[permission]` `allow = ["Edit", "Bash(git *)", "Bash(gh *)", "Bash(glab *)", "MCPTool(briefling__*)"]` |
 | Qwen Code | `~/.qwen/settings.json` | `"permissions": {"allow": ["Edit", "Bash(git *)", "Bash(gh *)", "Bash(glab *)", "mcp__briefling"]}` |
 | Codex (`codex-acp`) | `~/.codex/config.toml` | `approval_policy = "never"`, `sandbox_mode = "workspace-write"`, `[sandbox_workspace_write]` `network_access = true` (push needs the network) |
 | Cursor | `~/.cursor/cli-config.json` | `"permissions": {"allow": ["Write(**)", "Shell(git)", "Shell(gh)", "Shell(glab)"]}` |

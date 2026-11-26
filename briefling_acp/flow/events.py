@@ -138,7 +138,7 @@ def events_for(agent: str, dept: Department, items: list[Item]) -> list[Event]:
             if not role.labelled and not _assignees(dept, it, rname):
                 if not it.author_trusted:
                     continue                              # outsider item, not vetted by a member
-                if it.author_agent and not any(c.human for c in it.comments):
+                if it.author_agent and not it.approved and not any(c.human for c in it.comments):
                     continue                              # created by an agent: waits for a human signal
 
             auto = role.named_label(agent, {l for x in items for l in x.labels}) if trusted_take(role, dept, it) else None

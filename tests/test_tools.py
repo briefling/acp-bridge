@@ -504,6 +504,19 @@ def test_radar_profile_builds_like_the_plugin_and_reads_the_ack():
     assert "radar_profile" in tools.NAMES
 
 
+def test_radar_profile_edit_builds_like_the_plugin_and_reads_the_answer():
+    frame, err = tools.BUILD["radar_profile_edit"]({"add": {"competitors": [" Notion: docs "]}, "remove": {"tech": []}})
+    assert err is None and frame == {"type": "radar.edit", "add": {"competitors": ["Notion: docs"]}}
+    assert tools.BUILD["radar_profile_edit"]({"add": {"owners": ["x"]}})[0] is None
+    answer = {"type": "radar.edited", "profile": {"product": "Hub.", "competitors": ["Notion: docs"], "tech": [], "sources": [], "by": "b", "at": 1},
+              "added": {"competitors": ["Notion: docs"]}, "removed": {}, "missing": []}
+    r = tools.result("radar_profile_edit", frame, answer)
+    assert r["ok"] is True and r["profile"]["competitors"] == ["Notion: docs"] and "Say in this conversation" in r["detail"]
+    assert "Current profile" in tools.result("radar_profile_edit", {"type": "radar.edit"}, {**answer, "added": {}})["detail"]
+    assert "count 37, max 36" in tools.refused("radar_profile_edit", "bad_profile", "competitors: count 37, max 36")["detail"]
+    assert "a lead must ask it" in tools.refused("radar_profile_edit", "not_lead")["detail"]
+    assert "radar_profile_edit" in tools.NAMES
+
 
 def test_build_title_and_outcome_carry_the_tags():
     assert td.build_topic_title({"title": "Firmware", "tags": ["ui"]}) == ({"type": "topic.title", "title": "Firmware", "tags": ["ui"]}, None)

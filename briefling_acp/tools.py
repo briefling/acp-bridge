@@ -18,7 +18,7 @@ from . import tooldefs as td
 
 SCHEMAS = [td.OUTCOME_SCHEMA, td.PROPOSE_SCHEMA, td.ASK_CHOICES_SCHEMA, td.PLAN_SCHEMA, td.ISSUE_SCHEMA, td.ABOUT_SCHEMA, td.PROPOSE_ACTION_SCHEMA, td.ACQUIRE_SCHEMA,
            td.RELEASE_SCHEMA, td.ACQUIRE_ALIAS_SCHEMA, td.RELEASE_ALIAS_SCHEMA, td.PUSHED_SCHEMA, td.MEMORY_SEARCH_SCHEMA, td.MEMORY_READ_SCHEMA, td.MEMORY_PROPOSE_SCHEMA,
-           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_CLEAR_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.POLL_VOTE_SCHEMA, td.AGENT_CARD_SCHEMA,
+           td.TOPIC_TITLE_SCHEMA, td.SPACE_THREADS_SCHEMA, td.THREAD_READ_SCHEMA, td.SPACE_METRICS_SCHEMA, td.RADAR_SIGNAL_SCHEMA, td.RADAR_CLEAR_SCHEMA, td.RADAR_PROFILE_SCHEMA, td.RADAR_PROFILE_EDIT_SCHEMA, td.POLL_VOTE_SCHEMA, td.AGENT_CARD_SCHEMA,
            td.SKILL_READ_SCHEMA, td.SKILL_PROPOSE_SCHEMA, td.APPLET_PROPOSE_SCHEMA, td.APPLET_LIST_SCHEMA,
            td.REMINDER_PROPOSE_SCHEMA, td.MAIL_IMPORT_SCHEMA, td.EXCHANGE_READ_SCHEMA, td.EXCHANGE_SUMMARY_SCHEMA]
 # Mail exchanges: offered only when the space's « exchanges » module is on (each one is read on every turn).
@@ -115,6 +115,7 @@ BUILD: Dict[str, Callable[[Dict[str, Any]], Built]] = {
     "radar_signal": td.build_radar_signal,
     "radar_clear": td.build_radar_clear,
     "radar_profile": td.build_radar_profile,
+    "radar_profile_edit": td.build_radar_profile_edit,
     "attachment_get": build_attachment_get, "agent_card": td.build_agent_card,
     "skill_read": td.build_skill_read, "skill_propose": td.build_skill_propose,
     "applet_propose": td.build_applet_propose, "applet_list": build_applet_list, "reminder_propose": td.build_reminder_propose,
@@ -155,6 +156,7 @@ ERRORS = {
     "radar_signal": td.RADAR_ERRORS,
     "radar_clear": td.RADAR_CLEAR_ERRORS,
     "radar_profile": td.RADAR_PROFILE_ERRORS,
+    "radar_profile_edit": td.RADAR_PROFILE_EDIT_ERRORS,
     "attachment_get": {**td.INTROSPECT_ERRORS, "files_off": "This hub stores no files."},
     "agent_card": td.AGENT_CARD_ERRORS,
     "skill_read": td.SKILL_ERRORS, "skill_propose": td.SKILL_ERRORS,
@@ -171,6 +173,8 @@ def refused(tool: str, code: str, detail: str = "") -> Dict[str, Any]:
     """The hub refused the frame (`error` with the frame's client_id as `ref`; `detail` of not_allowed: the allowed agents)."""
     if tool in ACTION_TOOLS:
         return td.action_refused(code, detail)
+    if tool == "radar_profile_edit" and code == "bad_profile":  # the hub names the rules broken
+        return {"ok": False, "error": code, "detail": f"{ERRORS[tool][code]} {detail}".strip()}
     return {"ok": False, "error": code, "detail": ERRORS[tool].get(code, code)}
 
 
@@ -201,6 +205,8 @@ def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str
         return td.skill_result(frame, answer)
     if tool == "radar_profile":
         return {"ok": True, "detail": td.RADAR_PROFILE_SENT}
+    if tool == "radar_profile_edit":
+        return td.radar_edit_result(answer)
     if tool == "applet_list":  # same keys as the plugin's adapter.applet_list
         keep = ("id", "version", "name", "description", "emoji", "agent", "instruction", "fields", "leadsOnly")
         return {"ok": True, "applets": [{k: x[k] for k in keep if k in x} for x in answer.get("applets") or [] if isinstance(x, dict)]}

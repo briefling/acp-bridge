@@ -17,7 +17,7 @@ PLATFORM_BOTS = frozenset({"github-actions"})   # runs the repo's own workflows:
 CI = {"SUCCESS": "SUCCESS", "FAILURE": "FAILURE", "ERROR": "FAILURE", "PENDING": "PENDING", "EXPECTED": "PENDING"}
 
 ISSUE_FIELDS = """
-  number title url state createdAt authorAssociation author { login }
+  number title url state createdAt authorAssociation author { login } body
   repository { nameWithOwner }
   labels(first:30) { nodes { name } }
   issueDependenciesSummary { blockedBy }
@@ -106,8 +106,21 @@ def outsider_at(n: dict, bots: set[str], can_write: Callable[[str], bool] | None
     return max((x.get("createdAt") or "" for x in nodes if outside(x)), default="")
 
 
+APPROVED_RE = re.compile(r"<!-- briefling:approved-by=([A-Za-z0-9_-]{1,64}) -->")
+
+
+def approved_of(n: dict, writers: set[str]) -> str:
+    """The member whose approval of a briefling card created the issue: the hub's marker, believed only when the
+    issue's author is one of `writers` (the hub's App in `trusted_bots`, never an agent identity), since an agent
+    writing its own issue could add the marker; briefling escapes `<!--` in the text it relays."""
+    if _login(n.get("author")) not in writers:
+        return ""
+    m = APPROVED_RE.search(n.get("body") or "")
+    return m.group(1) if m else ""
+
+
 def parse_issue(n: dict, column: str | None, flow: Flow, bots: set[str],
-                can_write: Callable[[str], bool] | None = None) -> Item:
+                can_write: Callable[[str], bool] | None = None, writers: set[str] = frozenset()) -> Item:
     prs = [PR(p["number"], p["url"], p["headRefOid"], p.get("mergeable") or "UNKNOWN",
               CI.get(((p.get("statusCheckRollup") or {}).get("state")) or ""))
            for p in (n.get("closedByPullRequestsReferences") or {}).get("nodes") or []]
@@ -119,7 +132,7 @@ def parse_issue(n: dict, column: str | None, flow: Flow, bots: set[str],
         author_agent=_login(n.get("author")) if _login(n.get("author")) in bots else None,
         blocked_by=(n.get("issueDependenciesSummary") or {}).get("blockedBy") or 0,
         comments=[parse_comment(c, bots, can_write) for c in n["comments"]["nodes"]], prs=prs,
-        outsider_at=outsider_at(n, bots, can_write))
+        outsider_at=outsider_at(n, bots, can_write), approved=approved_of(n, writers))
 
 
 def split_ref(ref: str) -> tuple[str, str, int]:
@@ -134,11 +147,13 @@ class GitHubBoard:
     """Board = one GitHub Project v2; items = its open issues."""
 
     def __init__(self, board: dict, flow: Flow, bots: set[str], token: str | None = None,
-                 graphql: Callable[..., dict] | None = None, run: Callable[..., str] | None = None):
+                 graphql: Callable[..., dict] | None = None, run: Callable[..., str] | None = None,
+                 writers: set[str] = frozenset()):
         self.owner = board["owner"]
         self.number = int(board["number"])
         self.kind = board.get("owner_type", "organization")
         self.flow, self.bots, self.token = flow, {b.lower() for b in bots}, token
+        self.writers = {w.lower() for w in writers}
         self.graphql = graphql or make_graphql(token)
         self.run = run or (lambda args, stdin=None: gh(args, stdin, token))
         self._perms: dict[tuple[str, str], bool] = {}
@@ -157,7 +172,7 @@ class GitHubBoard:
 
     def _parse(self, n: dict, column: str | None) -> Item:
         repo = n["repository"]["nameWithOwner"]
-        return parse_issue(n, column, self.flow, self.bots, lambda login: self.can_write(repo, login))
+        return parse_issue(n, column, self.flow, self.bots, lambda login: self.can_write(repo, login), self.writers)
 
     # ------------------------------------------------------------ read
     def items(self) -> list[Item]:

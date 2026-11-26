@@ -50,6 +50,7 @@ class Item:
     comments: list[Comment] = field(default_factory=list)
     prs: list[PR] = field(default_factory=list)
     outsider_at: str = ""             # newest content from a non-member (body, comment, linked PR), ISO 8601
+    approved: str = ""                # briefling member whose approval of a card created it (the hub wrote it): a human signal
 
     @property
     def ref(self) -> str:

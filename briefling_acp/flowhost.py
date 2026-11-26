@@ -269,7 +269,9 @@ class FlowHost:
 
     def _github_board(self, co: Company, dept: Department):
         token = make_token(self.fs.identity, dept.board["owner"], cache_dir=self.token_dir) if self.fs.identity else None
-        return GitHubBoard(dept.board, dept.flow, bots(co), token=token)
+        # Writers: the trusted bots that are not agent identities (the hub's App): only they may carry an approval marker.
+        agents = {str(a.get("identity", "")).lower() for a in co.agents.values() if a.get("identity")}
+        return GitHubBoard(dept.board, dept.flow, bots(co), token=token, writers=set(co.trusted_bots) - agents)
 
     def hub_call(self, frame: Dict[str, Any], timeout: float = HUB_CALL_S) -> Dict[str, Any]:
         """A hub frame from a worker thread (the tick's engine, a board tool): run on the host's loop, waited here.

@@ -54,7 +54,9 @@ def parse_item(it: dict, flow: Flow, bots: set[str]) -> Item:
     return Item(repo=str(it["repo"]), number=int(it["number"]), title=str(it.get("title") or ""),
                 state=flow.state_of(it.get("column")), labels=[str(l) for l in it.get("labels") or []], url=str(it.get("url") or ""),
                 author=author, author_trusted=bool(it.get("trusted")), author_agent=author if author in bots else None,
-                blocked_by=0, comments=[parse_note(n, bots) for n in it.get("notes") or []], prs=prs, outsider_at=outsider_at(it))
+                blocked_by=0, comments=[parse_note(n, bots) for n in it.get("notes") or []], prs=prs, outsider_at=outsider_at(it),
+                # The hub sets it only on an issue its token wrote from a card a human approved (hub/src/issuestart.ts).
+                approved=str(it.get("approved") or "") if author in bots else "")
 
 
 class GitLabBoard:
