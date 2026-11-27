@@ -40,6 +40,7 @@ import aiohttp
 from aiohttp import web
 
 from . import attachments as att
+from . import voicekit as vk
 from . import tools as tl
 from .acp import AcpAgent, AcpError, allow_once_option
 from .join import PROTOCOL, PROTOCOL_VERSION, proxy_for
@@ -118,7 +119,7 @@ def poster_names(frame: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def prompt_text(frame: Dict[str, Any], sent: Optional[Set[str]] = None) -> str:
+def prompt_text(frame: Dict[str, Any], sent: Optional[Set[str]] = None, voice: str = "") -> str:
     """What the agent receives: one line (where, who), the list of attachments (`sent`: ids whose content comes with
     the prompt), then the same context as a Hermes agent (space description, resources, repos, Lounge rules, unseen
     messages quoted as data: the plugin's `with_context`), then the text."""
@@ -129,7 +130,25 @@ def prompt_text(frame: Dict[str, Any], sent: Optional[Set[str]] = None) -> str:
     who = str(frame.get("author_name") or "a human")[:100]
     head = f"[briefling {kind} \"{title}\", message from {who}]\n"
     head += att.listing(frame_files(frame), sent or set(), {k: v for k, v in poster_names(frame).items() if k})
-    return head + with_context(ctx, reply_hint(msg) + str(msg.get("text") or ""))
+    return head + with_context(ctx, voice + reply_hint(msg) + str(msg.get("text") or ""))
+
+
+# Voice notes (embedded voice, voicekit): the bridge transcribes them itself (Whisper), the agent reads the words.
+VOICE_NOTE_HINT = ("[The human sent a voice note recorded in briefling: its transcript follows (their own words). "
+                   "Answer what it says, in text as usual.]\n")
+VOICE_NOTE_LOST = ("[The human sent a voice note recorded in briefling, but it could not be transcribed on this machine: "
+                   "say so in one sentence and ask them to type it.]\n")
+AUDIO_MAX = 20 * 1024 * 1024   # one voice note (the hub's file cap)
+NOTES_MAX = 3                  # voice notes transcribed per turn
+
+
+def voice_notes(frame: Dict[str, Any], files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The recordings of the message's author among the delivered files (`by`; the message's own on an older hub):
+    another member's note is never taken as the author's words (the plugin's inbound_type)."""
+    msg = frame.get("message") or {}
+    author = str((msg.get("author") or {}).get("id") or "")
+    own = {f.get("id") for f in (msg.get("files") or []) if isinstance(f, dict)}
+    return [f for f in files if vk.is_recording(f) and ((bool(author) and f["by"] == author) if "by" in f else f.get("id") in own)]
 
 
 def task_text(title: str, text: str) -> str:
@@ -204,7 +223,12 @@ class Turn:
 
     def reply(self) -> str:
         notes = "\n".join(f"_{t if t == TOOLS_HINT else REFUSED.format(title=t)}_" for t in self.refused)
-        return (self.text.strip() + ("\n\n" + notes if notes else "")).strip()
+        text = self.text
+        if self.thread in self.bridge.speak:  # a spoken reply is owed: the 🔊 line leaves the text, kept for the end
+            text, said = vk.split_spoken(text)
+            if said:
+                self.bridge.speak[self.thread] = said
+        return (text.strip() + ("\n\n" + notes if notes else "")).strip()
 
     async def flush(self, force: bool = False) -> None:
         body = self.reply()[:MAX_TEXT]
@@ -371,6 +395,12 @@ class Bridge:
         # at once. flow_dir = its state (None = off); BRIEFLING_FLOW = optional settings file, BRIEFLING_FLOW_AUTO=0 =
         # only that file's entries (no host made on the hub's `flow.pilot true`). ACP reports no cost: the caps that
         # hold are the config's tasks per day (max_events_per_day) and runs per task, not the cost ones.
+        # Embedded voice (voicekit, BRIEFLING_VOICE_MODE: embedded by default, off; « hermes » means off here):
+        # voice notes transcribed by the bridge, the 🔊 summary spoken after the turn. Installed at the first note.
+        self.voice_mode = vk.mode(env, bridge=True)
+        self.voice_env = env
+        self.voice: Optional[vk.Voice] = None
+        self.speak: Dict[str, Optional[str]] = {}  # thread -> 🔊 summary seen in this turn (None = owed, not seen)
         self.thread_space: Dict[str, str] = {}  # thread -> its space (deliver, flow task)
         self.mails_off: Set[str] = set()        # threads whose space has the « exchanges » module off (deliver context)
         self.flow_lock = asyncio.Lock()          # the hub's flow frames, handled one at a time in arrival order
@@ -499,6 +529,8 @@ class Bridge:
             self.flow.stop()
         for t in list(self.tasks):
             t.cancel()
+        if self.voice is not None:  # the warm voice worker never outlives the bridge
+            self.voice.stop()
         await self.agent.stop()
         if self.socket_server is not None:
             self.socket_server.close()
@@ -562,7 +594,7 @@ class Bridge:
                 self._spawn(self._flow_frame(frame))
         elif kind == "release":  # pushed by the hub right after a deploy
             self.on_release(frame.get("release"))
-        elif kind in ("ack", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "radar.edited", "skill.result", "skill.proposed", "doc.result", "doc.text", "memory.proposed", "files.urls",
+        elif kind in ("ack", "upload.ready", "resource.result", "action.result", "memory.result", "introspect.result", "agentcard.result", "radar.edited", "skill.result", "skill.proposed", "doc.result", "doc.text", "memory.proposed", "files.urls",
                       "flow.result", "board.items", "board.written", "flow.switched", "applet.list", "mail.imported", "exchange.read"):
             fut = self.waiting.pop(str(frame.get("client_id")), None)
             if fut and not fut.done():
@@ -643,7 +675,9 @@ class Bridge:
                 files = frame_files(frame) if frame else []
                 blocks, sent = await att.prompt_blocks(self.session, files, self.agent.capabilities.get("promptCapabilities") or {},
                                                        self.ws_url, proxy_for) if files else ([], set())
-                text = task_text(*task) if task else prompt_text(frame, sent)
+                self.speak.pop(thread, None)
+                heard = await self._hear(thread, frame, files) if frame and self.voice_mode == "embedded" else ""
+                text = task_text(*task) if task else prompt_text(frame, sent, heard)
                 reason = await self.agent.prompt(sid, text, turn.on_update, turn.on_permission, blocks)
             except (AcpError, OSError) as e:
                 logger.warning("turn failed in %s: %s", thread, e)
@@ -662,6 +696,7 @@ class Bridge:
                     turn.text = NO_REPLY.format(reason=reason)
                 await turn.flush(force=True)
                 self.turns.pop(thread, None)
+                self._say_later(thread)
                 if turn.late:
                     turn.late.cancel()
                 if turn.trailing:
@@ -673,6 +708,102 @@ class Bridge:
                     if turn.perm is not None:
                         await self._flow_blocked(thread, turn)
                     self.flow.turn_ended(thread, self.thread_space.get(thread), task is not None, None)
+
+    # -- embedded voice (voicekit) -------------------------------------------------------
+
+    def _voice_kit(self) -> "vk.Voice":
+        if self.voice is None:
+            self.voice = vk.Voice(env=self.voice_env)
+        return self.voice
+
+    async def _notice(self, thread: str, text: str) -> None:
+        await self.send({"type": "message.final", "thread": thread, "msg_id": new_id(), "text": text,
+                         "rev": self.next_rev(), "notice": True})
+
+    async def _hear(self, thread: str, frame: Dict[str, Any], files: List[Dict[str, Any]]) -> str:
+        """The author's voice notes as text for the prompt (hint + transcripts), each echoed in the thread as
+        `🎙️ "…"` (the client shows it as a transcript); "" when there is none. « Reply by voice » owes a 🔊 line."""
+        notes = [f for f in voice_notes(frame, files) if att.url_ok(f.get("url"), self.ws_url)][:NOTES_MAX]
+        if not notes or self.session is None:
+            return ""
+        voice = self._voice_kit()
+        if not voice.installed():
+            await self._notice(thread, vk.INSTALLING)
+        heard: List[str] = []
+        for f in notes:
+            data = await att.download(self.session, f["url"], AUDIO_MAX, proxy_for(f["url"]))
+            if data is None:
+                continue
+            fd, path = tempfile.mkstemp(prefix="briefling-note-", suffix=os.path.splitext(str(f.get("name")))[1])
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                words = await voice.transcribe(path)
+            except vk.VoiceError as e:
+                logger.warning("voice note not transcribed in %s: %s", thread, e)
+                await self._notice(thread, vk.failed_line(e).replace("No audio note", "Voice note not transcribed"))
+                break
+            finally:
+                os.unlink(path)
+            if words:
+                heard.append(words)
+                await self.send({"type": "message.final", "thread": thread, "msg_id": new_id(),
+                                 "text": f"🎙️ \"{words[:MAX_TEXT - 10]}\"", "rev": self.next_rev()})
+        if not heard:
+            return VOICE_NOTE_LOST
+        owed = vk.wants_voice(notes)
+        if owed:
+            self.speak[thread] = None
+        return (VOICE_NOTE_HINT + (vk.reply_hint("embedded") if owed else "")
+                + "".join(f"[Transcript of the voice note]: {w}\n" for w in heard))
+
+    def _say_later(self, thread: str) -> None:
+        said = self.speak.pop(thread, None)
+        if said:
+            self._spawn(self._say(thread, said))
+
+    async def _say(self, thread: str, said: str) -> None:
+        """The 🔊 summary as an audio note, posted after the turn's text (the client plays it, in or out of a turn)."""
+        voice = self._voice_kit()
+        if not voice.installed():
+            await self._notice(thread, vk.INSTALLING)
+        path = None
+        try:
+            path = await voice.speak(said)
+            fid = await self._upload(thread, path, vk.spoken_name(), "audio/wav")
+            if fid:
+                await self.send({"type": "message.final", "thread": thread, "msg_id": new_id(), "text": " ",
+                                 "rev": self.next_rev(), "files": [fid]})
+        except vk.VoiceError as e:
+            logger.warning("spoken reply failed in %s: %s", thread, e)
+            await self._notice(thread, vk.failed_line(e))
+        finally:
+            if path:
+                os.unlink(path)
+
+    async def _upload(self, thread: str, path: str, name: str, mime: str) -> Optional[str]:
+        """A local file into the thread's space through the hub's presigned S3 form (the plugin's _upload)."""
+        space = self.thread_space.get(thread)
+        if not space or self.session is None:
+            return None
+        size = os.path.getsize(path)
+        try:
+            ready = await self.request({"type": "upload", "space": space, "name": name, "mime": mime, "size": size})
+            post = ready["post"]
+            form = aiohttp.FormData()
+            for k, v in (post.get("fields") or {}).items():
+                form.add_field(k, v)
+            with open(path, "rb") as fh:
+                form.add_field("file", fh, filename=name, content_type=mime)  # must be the last field
+                async with self.session.post(post["url"], data=form, proxy=proxy_for(post["url"]),
+                                             timeout=aiohttp.ClientTimeout(total=120)) as r:
+                    if r.status not in (200, 201, 204):
+                        logger.warning("S3 upload failed: %s", r.status)
+                        return None
+            return str(ready["file"]["id"])
+        except (HubRefused, ConnectionError, asyncio.TimeoutError, aiohttp.ClientError, KeyError, TypeError) as e:
+            logger.warning("upload failed: %s", type(e).__name__)
+            return None
 
     async def on_stop(self, frame: Dict[str, Any]) -> None:
         thread, by = frame.get("thread"), str(frame.get("by") or "")

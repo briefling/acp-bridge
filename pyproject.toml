@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "briefling-acp-bridge"
-version = "0.3.70"
+version = "0.3.71"
 description = "Connects an ACP agent (Kiro CLI, ...) to a briefling hub"
 readme = "README.md"
 license = { text = "MIT" }
@@ -15,7 +15,8 @@ dependencies = ["aiohttp==3.14.5", "PyYAML==6.0.4"]  # PyYAML: the flow's config
 briefling-acp = "briefling_acp.__main__:main"
 
 [tool.setuptools]
-packages = ["briefling_acp", "briefling_acp.flow", "briefling_acp.flow.backends"]
+packages = ["briefling_acp", "briefling_acp.flow", "briefling_acp.flow.backends", "briefling_acp.voicekit"]
 
 [tool.setuptools.package-data]
 "briefling_acp.flow" = ["flows/*.yml", "playbooks/*/*.md"]  # the shipped flows and playbooks (the plugin's, by symlink)
+"briefling_acp.voicekit" = ["voice.in", "voice.lock"]  # the embedded voice's pinned requirements (the plugin's, by symlink)

@@ -12,7 +12,7 @@ project memory) through a local MCP server the bridge declares in each session.
 On the agent's machine, with Python 3.11+ and [pipx](https://pipx.pypa.io) (`brew install pipx` on macOS):
 
 ```sh
-pipx install "git+https://github.com/briefling/acp-bridge@v0.3.70"
+pipx install "git+https://github.com/briefling/acp-bridge@v0.3.71"
 cd <the folder Kiro will work in>
 briefling-acp "<invitation link>"
 ```
@@ -29,7 +29,7 @@ the join: the bridge only answers them. In the space settings the invitation the
 Options: `--cwd DIR` (the agent's folder, default the current one), `--env FILE` (another credentials file, one per
 agent), `--force` (join again), `-- <command>` for another agent or Kiro options (default `kiro-cli acp`, e.g.
 `-- kiro-cli acp --agent my-agent`). The `BRIEFLING_*` variables of the process environment override the file. Without
-pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.70"`.
+pipx: `python3 -m venv ~/.venvs/briefling-acp && ~/.venvs/briefling-acp/bin/pip install "git+https://github.com/briefling/acp-bridge@v0.3.71"`.
 
 **Behind a proxy**: the bridge's connections to the hub (invitation, token, WebSocket) use the machine's proxy:
 `HTTPS_PROXY` (also for `wss://`), `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; without them, the system settings
@@ -45,6 +45,19 @@ feed shows one line after each update. Not automatic, and the space's leads see 
 picks the version: change the tag there), a checkout or editable install. The update record lives next to the
 credentials file (`bridge.env.update.json`). Under a service manager (launchd, systemd), the restart keeps the same
 process: nothing to configure.
+
+## Voice notes and spoken replies
+
+`BRIEFLING_VOICE_MODE` (environment or credentials file): `embedded` by default, `off` to turn it off. A voice note
+recorded in briefling by the message's author is transcribed by the bridge (faster-whisper `small`, CPU) and reaches
+the agent as text; the transcript shows in the thread as `🎙️ "…"`. When « Reply by voice » is ticked, the agent ends
+its answer with a `🔊 <summary>` line, which the bridge cuts from the text and posts as an audio note (Pocket TTS).
+Nothing is installed before the first voice note: the bridge then builds a venv with [uv](https://docs.astral.sh/uv/)
+from the pinned, hashed `briefling_acp/voicekit/voice.lock` under `~/.cache/briefling/voice/` (~1 GB, a grey line in
+the thread says so) and downloads the weights at pinned revisions (~0.7 GB). `BRIEFLING_VOICE_NAME` = a Pocket TTS
+voice (`juergen` by default), `BRIEFLING_VOICE_LANG` = its language (`french`). Restart the bridge to apply a change.
+Needs `uv`; macOS 14+ on Apple silicon, Linux or Windows x64 (no Intel Mac).
+Weights: Kyutai Pocket TTS (CC-BY 4.0), Whisper (MIT).
 
 ## What the bridge does, and does not
 

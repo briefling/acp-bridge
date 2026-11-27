@@ -1,0 +1,6 @@
+# Top-level requirements of the embedded voice (voicekit/__init__.py). Regenerate voice.lock after any change:
+#   uv pip compile --universal --torch-backend cpu --generate-hashes -p 3.12 voice.in -o voice.lock
+pocket-tts==4.0.1
+num2words==0.5.14
+faster-whisper==1.2.1
+av==16.1.0  # av 19 breaks faster-whisper 1.2.1 (open() got an unexpected keyword argument 'metadata_errors')
