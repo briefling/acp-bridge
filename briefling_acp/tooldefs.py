@@ -601,6 +601,51 @@ BRANCH_RE = re.compile(r"(?![-/])(?!.*\.\.)[A-Za-z0-9._/-]{1,200}")
 
 HUB_UNREACHABLE = {"ok": False, "error": "hub_unreachable", "detail": "briefling hub not reachable, try again later."}
 
+# Argument refusals carry the tool's parameters, so the 2nd try is right without a tool_describe round trip (most calls
+# go through Tool Search blind). Plugin and bridge both call schema_hint: one shape for every agent.
+SCHEMA_HINT_MAX = 3000     # chars of compact JSON; the largest schema (applet_propose) is ~4.2 k
+SCHEMA_DESC_CUT = (200, 80, 0)  # description lengths tried in turn until the parameters fit
+ARGS_REFUSED = ("bad_frame", "bad_args")  # hub / bridge codes of a refused argument
+SCHEMA_NOTE = "Your arguments were refused: fix them against `schema` (the tool's parameters) and call again."
+
+
+def _cut_descriptions(node: Any, cut: int) -> Any:
+    if isinstance(node, dict):
+        out = {}
+        for k, v in node.items():
+            if k == "description" and isinstance(v, str):
+                if cut:
+                    out[k] = v if len(v) <= cut else v[:cut - 1] + "…"
+            else:
+                out[k] = _cut_descriptions(v, cut)
+        return out
+    if isinstance(node, list):
+        return [_cut_descriptions(v, cut) for v in node]
+    return node
+
+
+def schema_hint(schema: Any) -> Any:
+    """A tool schema's ``parameters`` for an argument refusal, at most SCHEMA_HINT_MAX chars of JSON: descriptions are
+    shortened, then dropped, before the structure (names, types, enums, required, limits) is ever cut. None if no schema."""
+    params = schema.get("parameters") if isinstance(schema, dict) else None
+    if not isinstance(params, dict):
+        return None
+    hint: Any = params
+    for cut in (None,) + SCHEMA_DESC_CUT:
+        hint = params if cut is None else _cut_descriptions(params, cut)
+        if len(json.dumps(hint, ensure_ascii=False, separators=(",", ":"))) <= SCHEMA_HINT_MAX:
+            return hint
+    return json.dumps(hint, ensure_ascii=False, separators=(",", ":"))[:SCHEMA_HINT_MAX - 1] + "…"
+
+
+def with_schema(result: Dict[str, Any], schema: Any) -> Dict[str, Any]:
+    """``result`` plus the tool's schema when it refuses the arguments (``ok`` false, code in ARGS_REFUSED); any other
+    result unchanged."""
+    if not isinstance(result, dict) or result.get("ok") is not False or result.get("error") not in ARGS_REFUSED:
+        return result
+    hint = schema_hint(schema)
+    return {**result, "schema": hint, "note": SCHEMA_NOTE} if hint is not None else result
+
 
 # Project memory: protocol/memory.ts limits.
 MEMORY_TEXT_MAX = 400      # a decision or pitfall + why, two sentences (protocol/memory.ts MEMORY_TEXT_MAX)

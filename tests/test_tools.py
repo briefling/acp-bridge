@@ -688,3 +688,36 @@ async def test_document_tools_shared_with_the_plugin(env):
     assert "'md' or 'html'" in json.dumps(bad)  # refused by the bridge: no 3rd doc.write frame was answered above
     read, _ = tool_result(text, "document_read")
     assert (read["text"], read["versions"], read["title"]) == ("# Brief", [v1], "Brief")
+
+
+async def test_argument_refusals_carry_the_tool_schema_like_the_plugin(env):
+    """A refused argument, local (bad_args) or from the hub (bad_frame), carries tooldefs.schema_hint of the tool's
+    parameters: the agent fixes its call without tool_describe. Any other refusal stays as it was."""
+    hub, _ = env
+    await hub.push(deliver("t1", 'TOOL pushed_commits {"commits": [{"repo": "acme/app", "sha": "abc"}]}\n'
+                                 'TOOL propose_thread {"title": "Port", "brief": "do it"}\n'
+                                 'TOOL thread_read {"id": "t9"}'))
+    await answer(hub, "thread.propose", lambda f: {"type": "error", "ref": f["client_id"], "code": "bad_frame"})
+    await answer(hub, "thread.read", lambda f: {"type": "error", "ref": f["client_id"], "code": "forbidden"})
+    text = finals(await hub.collect_turn("t1"))[-1]["text"]
+    res, err = tool_result(text, "pushed_commits")
+    assert err and res["error"] == "bad_args" and res["schema"] == td.schema_hint(td.PUSHED_SCHEMA)
+    assert res["note"] == td.SCHEMA_NOTE and "commits" in res["schema"]["properties"]
+    res, err = tool_result(text, "propose_thread")
+    assert err and res["error"] == "bad_frame" and res["schema"] == td.schema_hint(td.PROPOSE_SCHEMA)
+    res, err = tool_result(text, "thread_read")
+    assert err and res["error"] == "forbidden" and "schema" not in res
+
+
+def test_every_tool_refused_on_its_arguments_gets_its_schema():
+    assert set(tools.BUILD) <= set(tools.SCHEMA_OF), "a tool without a schema would refuse without one"
+    refused = 0
+    for name, build in tools.BUILD.items():
+        frame, err = build({})
+        if err:
+            refused += 1
+            res = tools.bad_args(name, err)
+            assert res["detail"] == err and res["schema"] == td.schema_hint(tools.SCHEMA_OF[name]), name
+            assert len(json.dumps(res["schema"], ensure_ascii=False, separators=(",", ":"))) <= td.SCHEMA_HINT_MAX, name
+        assert tools.refused(name, "bad_frame").get("schema") == td.schema_hint(tools.SCHEMA_OF[name]), name
+    assert refused >= 30, refused

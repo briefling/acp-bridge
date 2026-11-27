@@ -920,7 +920,7 @@ class Bridge:
             return await self.flow_tool(thread, tool, args)
         frame, err = tl.BUILD[tool](args)
         if err:
-            return {"ok": False, "error": "bad_args", "detail": err}
+            return tl.bad_args(tool, err)
         early = STATUS_AFTER_S - (time.monotonic() - turn.started)
         if early > 0:  # like status: a frame right after turn.started can be handled first and refused no_turn (seen live)
             await asyncio.sleep(early)

@@ -42,6 +42,7 @@ SCHEMAS.append(ATTACHMENT_GET_SCHEMA)
 SCHEMAS += [td.BOARD_STATUS_SCHEMA, td.BOARD_COMMENT_SCHEMA, td.BOARD_MOVE_SCHEMA, td.BOARD_LABEL_SCHEMA,
             td.BOARD_SET_SCHEMA, td.FLOW_SWITCH_SCHEMA]
 NAMES = [s["name"] for s in SCHEMAS]
+SCHEMA_OF = {s["name"]: s for s in SCHEMAS}
 
 Built = td.Built  # (frame without `thread`, None) or (None, message)
 
@@ -172,12 +173,18 @@ ACTION_TOOLS = ("acquire_action", "release_action", "acquire_resource", "release
 
 
 def refused(tool: str, code: str, detail: str = "") -> Dict[str, Any]:
-    """The hub refused the frame (`error` with the frame's client_id as `ref`; `detail` of not_allowed: the allowed agents)."""
+    """The hub refused the frame (`error` with the frame's client_id as `ref`; `detail` of not_allowed: the allowed agents).
+    A refused argument (bad_frame) carries the tool's schema, like the plugin."""
     if tool in ACTION_TOOLS:
-        return td.action_refused(code, detail)
+        return td.with_schema(td.action_refused(code, detail), SCHEMA_OF.get(tool))
     if tool == "radar_profile_edit" and code == "bad_profile":  # the hub names the rules broken
         return {"ok": False, "error": code, "detail": f"{ERRORS[tool][code]} {detail}".strip()}
-    return {"ok": False, "error": code, "detail": ERRORS[tool].get(code, code)}
+    return td.with_schema({"ok": False, "error": code, "detail": ERRORS[tool].get(code, code)}, SCHEMA_OF.get(tool))
+
+
+def bad_args(tool: str, detail: str) -> Dict[str, Any]:
+    """A local argument check refused the call (tooldefs.py builder): its message and the tool's schema."""
+    return td.with_schema({"ok": False, "error": "bad_args", "detail": detail}, SCHEMA_OF.get(tool))
 
 
 def result(tool: str, frame: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str, Any]:
